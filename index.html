@@ -369,7 +369,20 @@ async function loadData(){
     const res=await fetch(GAS_URL);
     const json=await res.json();
     if(json.status==='ok'){
-      data=json.data.map(r=>({...r,guests:Number(r.guests),groups:Number(r.groups),sales:Number(r.sales||r.total||0),upa:Number(r.upa)}));
+      data=json.data.map(r=>{
+        // 日付を正規化（スプレッドシートのDate型対応）
+        let d=String(r.date||'');
+        if(d.includes('GMT')||d.includes('/')){
+          const parsed=new Date(d);
+          if(!isNaN(parsed)){
+            const y=parsed.getFullYear();
+            const m=String(parsed.getMonth()+1).padStart(2,'0');
+            const day=String(parsed.getDate()).padStart(2,'0');
+            d=y+'-'+m+'-'+day;
+          }
+        }
+        return {...r,date:d,guests:Number(r.guests),groups:Number(r.groups),sales:Number(r.sales||r.total||0),upa:Number(r.upa)};
+      });
       data.sort((a,b)=>a.date<b.date?-1:1);
       setSyncStatus('ok','同期済み');
     }else{setSyncStatus('err','エラー')}
@@ -479,20 +492,31 @@ async function deleteEntry(date){
 function renderSummary(){
   const fm=el('s-month').value;
   const filtered=fm?data.filter(r=>r.date.startsWith(fm)):data;
-  const totSales=filtered.reduce((a,r)=>a+(r.sales||r.total||0),0);
-  const totGuests=filtered.reduce((a,r)=>a+r.guests,0);
+  // 同一日付を合算
+  const dayMap={};
+  filtered.forEach(r=>{
+    const d=r.date;
+    if(!dayMap[d]) dayMap[d]={date:d,dow:r.dow,sales:0,guests:0,groups:0};
+    dayMap[d].sales+=(r.sales||r.total||0);
+    dayMap[d].guests+=r.guests;
+    dayMap[d].groups+=r.groups;
+  });
+  const aggregated=Object.values(dayMap).sort((a,b)=>a.date<b.date?-1:1);
+
+  const totSales=aggregated.reduce((a,r)=>a+r.sales,0);
+  const totGuests=aggregated.reduce((a,r)=>a+r.guests,0);
   el('s-sales').textContent=yen(totSales);
   el('s-upa').textContent=totGuests>0?yen(totSales/totGuests):'—';
   el('s-guests').textContent=num(totGuests);
-  el('s-days').textContent=filtered.length;
+  el('s-days').textContent=aggregated.length;
 
-  const recent=filtered.slice(-15);
+  const recent=aggregated.slice(-15);
   const labels=recent.map(r=>r.date.slice(8));
 
   if(cSales)cSales.destroy();
   cSales=new Chart(el('c-sales'),{
     type:'bar',
-    data:{labels,datasets:[{label:'売上',data:recent.map(r=>r.sales||r.total||0),backgroundColor:'#BA7517'}]},
+    data:{labels,datasets:[{label:'売上',data:recent.map(r=>r.sales),backgroundColor:'#BA7517'}]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
       x:{ticks:{autoSkip:false,maxRotation:45,font:{size:9},color:'#888780'}},
       y:{ticks:{callback:v=>'¥'+v.toLocaleString(),font:{size:9},color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}
@@ -511,7 +535,7 @@ function renderSummary(){
 
   const dowTot={},dowCnt={};
   DAYS.forEach(d=>{dowTot[d]=0;dowCnt[d]=0});
-  filtered.forEach(r=>{const s=r.sales||r.total||0;dowTot[r.dow]=(dowTot[r.dow]||0)+s;dowCnt[r.dow]=(dowCnt[r.dow]||0)+1});
+  aggregated.forEach(r=>{dowTot[r.dow]=(dowTot[r.dow]||0)+r.sales;dowCnt[r.dow]=(dowCnt[r.dow]||0)+1});
   const avgs=DAYS.map(d=>dowCnt[d]>0?Math.round(dowTot[d]/dowCnt[d]):0);
   const maxAvg=Math.max(...avgs,1);
   el('dow-bars').innerHTML=DAYS.map((d,i)=>{

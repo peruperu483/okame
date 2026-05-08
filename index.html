@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>売上・集客管理</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --gold:#BA7517;--gold-light:#FAEEDA;--gold-mid:#EF9F27;--gold-dark:#854F0B;--gold-darkest:#412402;
+  --bg:#fff;--bg2:#f8f7f4;
+  --text:#1a1a1a;--text2:#666;--text3:#999;
+  --border:rgba(0,0,0,0.12);--border2:rgba(0,0,0,0.22);
+  --radius:10px;--radius-lg:14px;
+  --danger:#A32D2D;--danger-bg:#FCEBEB;
+  --nav-h:58px;--header-h:58px;
+}
+html,body{height:100%;background:var(--bg2);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;font-size:15px;line-height:1.5}
+
+/* ===== LAYOUT ===== */
+.app{min-height:100vh;background:var(--bg);display:flex;flex-direction:column}
+
+/* iPad横向き: サイドバーナビ */
+@media(min-width:768px) and (orientation:landscape){
+  .app{flex-direction:row}
+  .sidebar{width:200px;min-height:100vh;background:var(--bg);border-right:1px solid var(--gold);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .main-area{flex:1;display:flex;flex-direction:column;min-width:0}
+  .bottom-nav{display:none}
+  .sidebar-header{padding:16px 14px 12px;border-bottom:1px solid var(--gold)}
+  .sidebar-header-icon{width:32px;height:32px;background:var(--gold-light);border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid var(--gold);margin-bottom:8px}
+  .sidebar-header-icon i{font-size:17px;color:var(--gold)}
+  .sidebar-header-title{font-size:15px;font-weight:600;color:var(--text)}
+  .sidebar-header-sub{font-size:10px;color:var(--gold)}
+  .sidebar-nav{padding:10px 8px;flex:1}
+  .sidebar-nav-btn{width:100%;display:flex;align-items:center;gap:10px;padding:10px 12px;border:none;background:none;cursor:pointer;color:var(--text2);font-size:14px;border-radius:var(--radius);margin-bottom:4px;text-align:left}
+  .sidebar-nav-btn i{font-size:18px;color:var(--text3)}
+  .sidebar-nav-btn.active{background:var(--gold-light);color:var(--gold-dark);font-weight:600}
+  .sidebar-nav-btn.active i{color:var(--gold)}
+  .sidebar-sync{padding:12px 14px;border-top:1px solid var(--border);font-size:11px;display:flex;align-items:center;gap:5px;color:var(--text2)}
+  .top-header{display:none}
+  .content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .section{padding:20px 24px 40px;max-width:900px}
+  .input-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .input-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+}
+
+/* モバイル縦向き */
+@media not all and (min-width:768px) and (orientation:landscape){
+  .sidebar{display:none}
+  .main-area{flex:1;display:flex;flex-direction:column}
+  .top-header{background:var(--bg);border-bottom:1px solid var(--gold);padding:12px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:10}
+  .top-header-icon{width:32px;height:32px;background:var(--gold-light);border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid var(--gold);flex-shrink:0}
+  .top-header-icon i{font-size:17px;color:var(--gold)}
+  .top-header-title{font-size:16px;font-weight:600;color:var(--text)}
+  .top-header-sub{font-size:10px;color:var(--gold)}
+  .top-header-sync{margin-left:auto;font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text2)}
+  .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg);border-top:0.5px solid var(--border);display:flex;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
+  .bottom-nav-btn{flex:1;padding:10px 0 8px;font-size:11px;border:none;background:none;cursor:pointer;color:var(--text2);display:flex;flex-direction:column;align-items:center;gap:2px}
+  .bottom-nav-btn i{font-size:22px}
+  .bottom-nav-btn.active{color:var(--gold)}
+  .content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .section{padding:14px 14px 90px}
+  .input-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .input-grid-3{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+}
+
+/* ===== COMMON ===== */
+.section{display:none}.section.active{display:block}
+.sync-dot{width:7px;height:7px;border-radius:50%;background:#ccc;flex-shrink:0}
+.sync-dot.ok{background:#1D9E75}
+.sync-dot.err{background:#E24B4A}
+.sync-dot.loading{background:var(--gold);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.card{background:var(--bg);border:0.5px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:12px}
+.field-label{font-size:12px;color:var(--text2);margin-bottom:5px;display:flex;align-items:center;gap:4px}
+.field-label i{font-size:13px;color:var(--gold)}
+input[type=date],input[type=number],input[type=month],input[type=text]{width:100%;font-size:15px;border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;background:var(--bg);color:var(--text);outline:none;-webkit-appearance:none;appearance:none}
+input:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(186,117,23,.12)}
+input[readonly]{background:var(--bg2);color:var(--text2)}
+
+/* ===== TAB PICKER ===== */
+.tab-picker{margin-bottom:0}
+.tab-picker-label{font-size:12px;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:4px}
+.tab-picker-label i{font-size:13px;color:var(--gold)}
+.tab-picker-scroll{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}
+.tab-picker-scroll::-webkit-scrollbar{display:none}
+.tab-num{min-width:44px;height:44px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg2);color:var(--text2);font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .12s}
+.tab-num.selected{background:var(--gold);color:#fff;border-color:var(--gold)}
+.tab-num:active{opacity:.7}
+
+/* ===== PREVIEW ===== */
+.preview{display:flex;border:1px solid var(--gold);border-radius:var(--radius);overflow:hidden;margin-bottom:14px}
+.preview-cell{flex:1;padding:10px 8px;text-align:center;border-right:0.5px solid var(--gold)}
+.preview-cell:last-child{border-right:none}
+.preview-label{font-size:10px;color:var(--gold-dark);margin-bottom:2px}
+.preview-val{font-size:16px;font-weight:600;color:var(--gold-darkest)}
+
+/* ===== BUTTONS ===== */
+.btn-row{display:flex;gap:8px}
+.btn{flex:1;padding:12px;border-radius:var(--radius);font-size:14px;font-weight:500;cursor:pointer;border:1px solid var(--border2);background:var(--bg);color:var(--text);display:flex;align-items:center;justify-content:center;gap:5px}
+.btn-gold{background:var(--gold);color:#fff;border-color:var(--gold)}
+.btn-gold:active{background:var(--gold-dark)}
+.btn:active{background:var(--bg2)}
+.btn:disabled{opacity:.5;pointer-events:none}
+
+/* ===== METRICS ===== */
+.metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+@media(min-width:768px) and (orientation:landscape){.metrics-grid{grid-template-columns:repeat(4,1fr)}}
+.metric{background:var(--bg2);border-radius:var(--radius);padding:12px 10px;text-align:center}
+.metric-accent{background:var(--gold-light);border:0.5px solid var(--gold)}
+.metric-lbl{font-size:11px;color:var(--text2);margin-bottom:3px}
+.metric-accent .metric-lbl{color:var(--gold-dark)}
+.metric-val{font-size:20px;font-weight:600;color:var(--text)}
+.metric-accent .metric-val{color:var(--gold-darkest)}
+.metric-sub{font-size:11px;color:var(--text3)}
+
+/* ===== TABLE ===== */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tbl{width:100%;font-size:12px;border-collapse:collapse;min-width:380px}
+.tbl th{padding:8px 8px;font-size:11px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--gold);text-align:right;white-space:nowrap}
+.tbl th:first-child{text-align:left}
+.tbl td{padding:9px 8px;border-bottom:0.5px solid var(--border);text-align:right;white-space:nowrap}
+.tbl td:first-child{text-align:left}
+.tbl tr:last-child td{border-bottom:none}
+.del-btn{background:var(--danger-bg);border:none;color:var(--danger);font-size:11px;padding:3px 9px;border-radius:6px;cursor:pointer}
+
+/* ===== CHART ===== */
+.sec-head{font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:5px}
+.sec-head i{color:var(--gold);font-size:15px}
+.chart-wrap{position:relative;width:100%;height:180px}
+.legend{display:flex;gap:12px;font-size:11px;color:var(--text2);margin-bottom:6px}
+.legend span{display:flex;align-items:center;gap:3px}
+.legend-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+.dow-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;align-items:end;height:110px}
+.dow-col{display:flex;flex-direction:column;align-items:center;gap:3px}
+.dow-outer{width:100%;background:var(--bg2);border-radius:4px 4px 0 0;display:flex;align-items:flex-end}
+.dow-inner{width:100%;background:var(--gold);border-radius:4px 4px 0 0;min-height:2px}
+.dow-name{font-size:10px;color:var(--text2)}
+.dow-kval{font-size:9px;color:var(--gold-dark);font-weight:600;min-height:12px}
+
+/* ===== MISC ===== */
+.filter-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.filter-row input{flex:1;font-size:14px}
+.empty{text-align:center;padding:2.5rem 1rem;color:var(--text2);font-size:13px}
+.empty i{font-size:36px;color:var(--gold-mid);display:block;margin-bottom:8px}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);background:#1a1a1a;color:#fff;font-size:13px;padding:10px 20px;border-radius:20px;opacity:0;transition:all .25s;pointer-events:none;z-index:100;white-space:nowrap}
+@media(min-width:768px) and (orientation:landscape){.toast{bottom:24px}}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.loading-overlay{position:fixed;inset:0;background:rgba(255,255,255,.7);display:none;align-items:center;justify-content:center;z-index:200}
+.loading-overlay.show{display:flex}
+.spinner{width:32px;height:32px;border:3px solid var(--gold-light);border-top-color:var(--gold);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mb12{margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- サイドバー（iPad横向き） -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-header-icon"><i class="ti ti-glass"></i></div>
+      <div class="sidebar-header-title">売上・集客管理</div>
+      <div class="sidebar-header-sub">bar management</div>
+    </div>
+    <div class="sidebar-nav">
+      <button class="sidebar-nav-btn active" onclick="nav('input',this)"><i class="ti ti-pencil"></i>入力</button>
+      <button class="sidebar-nav-btn" onclick="nav('list',this)"><i class="ti ti-list"></i>履歴</button>
+      <button class="sidebar-nav-btn" onclick="nav('summary',this)"><i class="ti ti-chart-bar"></i>集計</button>
+    </div>
+    <div class="sidebar-sync">
+      <div class="sync-dot" id="sync-dot-s"></div>
+      <span id="sync-text-s">接続中...</span>
+    </div>
+  </div>
+
+  <!-- メインエリア -->
+  <div class="main-area">
+    <!-- トップヘッダー（モバイル） -->
+    <div class="top-header">
+      <div class="top-header-icon"><i class="ti ti-glass"></i></div>
+      <div>
+        <div class="top-header-title">売上・集客管理</div>
+        <div class="top-header-sub">bar management</div>
+      </div>
+      <div class="top-header-sync">
+        <div class="sync-dot" id="sync-dot-m"></div>
+        <span id="sync-text-m">接続中...</span>
+      </div>
+    </div>
+
+    <!-- コンテンツ -->
+    <div class="content">
+
+      <!-- 入力 -->
+      <div id="sec-input" class="section active">
+        <div class="card">
+          <div class="input-grid mb12">
+            <div>
+              <div class="field-label"><i class="ti ti-calendar"></i>日付</div>
+              <input type="date" id="i-date" oninput="onDateChange()">
+            </div>
+            <div>
+              <div class="field-label"><i class="ti ti-clock"></i>曜日</div>
+              <input type="text" id="i-dow" readonly>
+            </div>
+          </div>
+
+          <!-- 来客数タブ -->
+          <div class="mb12">
+            <div class="tab-picker-label"><i class="ti ti-users"></i>来客数（人）</div>
+            <div class="tab-picker-scroll" id="guests-tabs"></div>
+          </div>
+
+          <!-- 組数タブ -->
+          <div class="mb12">
+            <div class="tab-picker-label"><i class="ti ti-armchair"></i>組数</div>
+            <div class="tab-picker-scroll" id="groups-tabs"></div>
+          </div>
+
+          <!-- 売上 -->
+          <div class="mb12">
+            <div class="field-label"><i class="ti ti-coin-yen"></i>売上（円）</div>
+            <input type="number" id="i-sales" min="0" inputmode="numeric" placeholder="0" oninput="onCalc()">
+          </div>
+
+          <!-- プレビュー -->
+          <div class="preview mb12">
+            <div class="preview-cell"><div class="preview-label">売上</div><div class="preview-val" id="p-total">¥0</div></div>
+            <div class="preview-cell"><div class="preview-label">客単価</div><div class="preview-val" id="p-upa">—</div></div>
+            <div class="preview-cell"><div class="preview-label">組単価</div><div class="preview-val" id="p-gpa">—</div></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn" onclick="clearForm()"><i class="ti ti-x"></i> クリア</button>
+            <button class="btn btn-gold" id="save-btn" onclick="saveEntry()"><i class="ti ti-check"></i> 保存する</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 履歴 -->
+      <div id="sec-list" class="section">
+        <div class="filter-row">
+          <input type="month" id="f-month" onchange="renderList()">
+          <button class="btn" style="flex:none;padding:10px 14px;font-size:13px" onclick="document.getElementById('f-month').value='';renderList()">全件</button>
+          <button class="btn" style="flex:none;padding:10px 14px;font-size:13px" onclick="loadData().then(renderList)"><i class="ti ti-refresh"></i></button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr>
+                <th style="text-align:left;padding-left:12px">日付</th>
+                <th>曜</th>
+                <th>来客</th>
+                <th>組数</th>
+                <th>売上</th>
+                <th>客単価</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="list-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 集計 -->
+      <div id="sec-summary" class="section">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+          <button class="btn" style="flex:none;padding:8px 14px;font-size:13px" onclick="loadData().then(renderSummary)"><i class="ti ti-refresh"></i> 更新</button>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric metric-accent"><div class="metric-lbl">総売上</div><div class="metric-val" id="s-sales">¥0</div></div>
+          <div class="metric metric-accent"><div class="metric-lbl">平均客単価</div><div class="metric-val" id="s-upa">—</div></div>
+          <div class="metric"><div class="metric-lbl">総来客数</div><div class="metric-val" id="s-guests">0</div><div class="metric-sub">人</div></div>
+          <div class="metric"><div class="metric-lbl">営業日数</div><div class="metric-val" id="s-days">0</div><div class="metric-sub">日</div></div>
+        </div>
+        <div class="card">
+          <div class="sec-head"><i class="ti ti-chart-bar"></i>売上推移（直近15件）</div>
+          <div class="chart-wrap"><canvas id="c-sales" role="img" aria-label="売上推移グラフ"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="sec-head"><i class="ti ti-users"></i>来客数推移（直近15件）</div>
+          <div class="chart-wrap" style="height:150px"><canvas id="c-guests" role="img" aria-label="来客数推移グラフ"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="sec-head"><i class="ti ti-calendar-week"></i>曜日別平均売上</div>
+          <div class="dow-grid" id="dow-bars"></div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+
+    <!-- ボトムナビ（モバイル） -->
+    <div class="bottom-nav">
+      <button class="bottom-nav-btn active" onclick="nav('input',this)"><i class="ti ti-pencil"></i>入力</button>
+      <button class="bottom-nav-btn" onclick="nav('list',this)"><i class="ti ti-list"></i>履歴</button>
+      <button class="bottom-nav-btn" onclick="nav('summary',this)"><i class="ti ti-chart-bar"></i>集計</button>
+    </div>
+
+  </div><!-- /main-area -->
+</div><!-- /app -->
+
+<div class="loading-overlay" id="loading"><div class="spinner"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const GAS_URL='https://script.google.com/macros/s/AKfycbx9wWjy4RYQuADSWHsJsV8zX8iLBtBaFzzoSSR-tWMFNVymckqhjf20XPjlfm0J7MJQ5Q/exec';
+const DAYS=['日','月','火','水','木','金','土'];
+let data=[];
+let cSales,cGuests;
+let selGuests=0,selGroups=0;
+
+const yen=n=>'¥'+Math.round(n).toLocaleString('ja-JP');
+const num=n=>Math.round(n).toLocaleString('ja-JP');
+const el=id=>document.getElementById(id);
+
+// ===== タブピッカー生成 =====
+function buildTabs(containerId,max,onSelect){
+  const wrap=el(containerId);
+  wrap.innerHTML='';
+  // 0も選択肢に
+  for(let i=0;i<=max;i++){
+    const btn=document.createElement('button');
+    btn.className='tab-num'+(i===0?' selected':'');
+    btn.textContent=i;
+    btn.onclick=()=>{
+      wrap.querySelectorAll('.tab-num').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      onSelect(i);
+      onCalc();
+    };
+    wrap.appendChild(btn);
+  }
+}
+buildTabs('guests-tabs',50,v=>selGuests=v);
+buildTabs('groups-tabs',30,v=>selGroups=v);
+
+// ===== 同期ステータス =====
+function setSyncStatus(state,text){
+  ['sync-dot-s','sync-dot-m'].forEach(id=>{
+    const d=el(id);
+    if(d){d.className='sync-dot'+(state?' '+state:'');}
+  });
+  ['sync-text-s','sync-text-m'].forEach(id=>{
+    const t=el(id);
+    if(t) t.textContent=text;
+  });
+}
+
+// ===== Toast =====
+function toast(msg){
+  const t=el('toast');
+  t.textContent=msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+function setLoading(show){el('loading').classList.toggle('show',show)}
+
+// ===== データ読み込み =====
+async function loadData(){
+  setSyncStatus('loading','同期中...');
+  try{
+    const res=await fetch(GAS_URL);
+    const json=await res.json();
+    if(json.status==='ok'){
+      data=json.data.map(r=>({...r,guests:Number(r.guests),groups:Number(r.groups),sales:Number(r.sales||r.total||0),upa:Number(r.upa)}));
+      data.sort((a,b)=>a.date<b.date?-1:1);
+      setSyncStatus('ok','同期済み');
+    }else{setSyncStatus('err','エラー')}
+  }catch(e){setSyncStatus('err','接続失敗')}
+}
+
+async function postData(payload){
+  const res=await fetch(GAS_URL,{method:'POST',body:JSON.stringify(payload)});
+  return res.json();
+}
+
+// ===== 日付・計算 =====
+const dateEl=el('i-date');
+dateEl.value=new Date().toISOString().split('T')[0];
+onDateChange();
+
+function onDateChange(){
+  const d=new Date(dateEl.value);
+  el('i-dow').value=isNaN(d.getTime())?'':DAYS[(d.getDay()+1)%7]+'曜日';
+}
+
+function onCalc(){
+  const sales=+el('i-sales').value||0;
+  el('p-total').textContent=yen(sales);
+  el('p-upa').textContent=selGuests>0?yen(sales/selGuests):'—';
+  el('p-gpa').textContent=selGroups>0?yen(sales/selGroups):'—';
+}
+
+function clearForm(){
+  el('i-sales').value='';
+  selGuests=0;selGroups=0;
+  buildTabs('guests-tabs',50,v=>selGuests=v);
+  buildTabs('groups-tabs',30,v=>selGroups=v);
+  onCalc();
+}
+
+// ===== 保存 =====
+async function saveEntry(){
+  const date=dateEl.value;
+  if(!date){toast('日付を入力してください');return}
+  const d=new Date(date);
+  const dow=DAYS[(d.getDay()+1)%7];
+  const guests=selGuests;
+  const groups=selGroups;
+  const sales=+el('i-sales').value||0;
+  const upa=guests>0?Math.round(sales/guests):0;
+  const existing=data.find(r=>r.date===date);
+  if(existing&&!confirm('この日付のデータを上書きしますか？'))return;
+  const btn=el('save-btn');
+  btn.disabled=true;
+  setLoading(true);
+  try{
+    const res=await postData({action:'save',date,dow,guests,groups,sales,total:sales,drink:sales,food:0,upa});
+    if(res.status==='ok'){
+      await loadData();
+      clearForm();
+      toast('保存しました');
+    }else{toast('保存に失敗しました')}
+  }catch(e){toast('通信エラーが発生しました')}
+  finally{btn.disabled=false;setLoading(false)}
+}
+
+// ===== ナビ =====
+function nav(sec,btn){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  // モバイルとサイドバー両方のボタンをリセット
+  document.querySelectorAll('.bottom-nav-btn,.sidebar-nav-btn').forEach(b=>b.classList.remove('active'));
+  el('sec-'+sec).classList.add('active');
+  btn.classList.add('active');
+  if(sec==='list')renderList();
+  if(sec==='summary')renderSummary();
+}
+
+// ===== 履歴 =====
+function renderList(){
+  const fm=el('f-month').value;
+  const rows=fm?data.filter(r=>r.date.startsWith(fm)):data;
+  const tbody=el('list-body');
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="7"><div class="empty"><i class="ti ti-glass-off"></i>データがありません</div></td></tr>';
+    return;
+  }
+  tbody.innerHTML=[...rows].reverse().map(r=>`
+    <tr>
+      <td style="padding-left:12px">${r.date}</td>
+      <td style="text-align:center">${r.dow}</td>
+      <td>${num(r.guests)}人</td>
+      <td>${num(r.groups)}組</td>
+      <td style="font-weight:600;color:#412402">${yen(r.sales||r.total||0)}</td>
+      <td>${r.upa?yen(r.upa):'—'}</td>
+      <td style="padding-right:8px"><button class="del-btn" onclick="deleteEntry('${r.date}')">削除</button></td>
+    </tr>`).join('');
+}
+
+async function deleteEntry(date){
+  if(!confirm(date+'のデータを削除しますか？'))return;
+  setLoading(true);
+  try{
+    const res=await postData({action:'delete',date});
+    if(res.status==='ok'){await loadData();renderList();toast('削除しました')}
+    else toast('削除に失敗しました');
+  }catch(e){toast('通信エラーが発生しました')}
+  finally{setLoading(false)}
+}
+
+// ===== 集計 =====
+function renderSummary(){
+  const totSales=data.reduce((a,r)=>a+(r.sales||r.total||0),0);
+  const totGuests=data.reduce((a,r)=>a+r.guests,0);
+  el('s-sales').textContent=yen(totSales);
+  el('s-upa').textContent=totGuests>0?yen(totSales/totGuests):'—';
+  el('s-guests').textContent=num(totGuests);
+  el('s-days').textContent=data.length;
+
+  const recent=data.slice(-15);
+  const labels=recent.map(r=>r.date.slice(5));
+
+  if(cSales)cSales.destroy();
+  cSales=new Chart(el('c-sales'),{
+    type:'bar',
+    data:{labels,datasets:[{label:'売上',data:recent.map(r=>r.sales||r.total||0),backgroundColor:'#BA7517'}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+      x:{ticks:{autoSkip:false,maxRotation:45,font:{size:9},color:'#888780'}},
+      y:{ticks:{callback:v=>'¥'+v.toLocaleString(),font:{size:9},color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}
+    }}
+  });
+
+  if(cGuests)cGuests.destroy();
+  cGuests=new Chart(el('c-guests'),{
+    type:'line',
+    data:{labels,datasets:[{label:'来客数',data:recent.map(r=>r.guests),borderColor:'#BA7517',backgroundColor:'rgba(186,117,23,0.08)',tension:0.35,fill:true,pointRadius:3,pointBackgroundColor:'#BA7517'}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+      x:{ticks:{autoSkip:false,maxRotation:45,font:{size:9},color:'#888780'}},
+      y:{beginAtZero:true,ticks:{stepSize:1,font:{size:9},color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}
+    }}
+  });
+
+  const dowTot={},dowCnt={};
+  DAYS.forEach(d=>{dowTot[d]=0;dowCnt[d]=0});
+  data.forEach(r=>{const s=r.sales||r.total||0;dowTot[r.dow]=(dowTot[r.dow]||0)+s;dowCnt[r.dow]=(dowCnt[r.dow]||0)+1});
+  const avgs=DAYS.map(d=>dowCnt[d]>0?Math.round(dowTot[d]/dowCnt[d]):0);
+  const maxAvg=Math.max(...avgs,1);
+  el('dow-bars').innerHTML=DAYS.map((d,i)=>{
+    const pct=Math.round(avgs[i]/maxAvg*80);
+    return`<div class="dow-col">
+      <div class="dow-kval">${avgs[i]>0?'¥'+Math.round(avgs[i]/1000)+'k':''}</div>
+      <div class="dow-outer" style="height:80px"><div class="dow-inner" style="height:${pct}%"></div></div>
+      <div class="dow-name">${d}曜</div>
+    </div>`;
+  }).join('');
+}
+
+loadData();
+</script>
+</body>
+</html>

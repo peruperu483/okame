@@ -269,21 +269,23 @@ input[readonly]{background:var(--bg2);color:var(--text2)}
 
       <!-- 集計 -->
       <div id="sec-summary" class="section">
-        <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-          <button class="btn" style="flex:none;padding:8px 14px;font-size:13px" onclick="loadData().then(renderSummary)"><i class="ti ti-refresh"></i> 更新</button>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <input type="month" id="s-month" style="flex:1;font-size:14px" onchange="renderSummary()">
+          <button class="btn" style="flex:none;padding:10px 14px;font-size:13px" onclick="document.getElementById('s-month').value='';renderSummary()">全期間</button>
+          <button class="btn" style="flex:none;padding:10px 14px;font-size:13px" onclick="loadData().then(renderSummary)"><i class="ti ti-refresh"></i></button>
         </div>
         <div class="metrics-grid">
-          <div class="metric metric-accent"><div class="metric-lbl">総売上</div><div class="metric-val" id="s-sales">¥0</div></div>
+          <div class="metric metric-accent"><div class="metric-lbl">売上合計</div><div class="metric-val" id="s-sales">¥0</div></div>
           <div class="metric metric-accent"><div class="metric-lbl">平均客単価</div><div class="metric-val" id="s-upa">—</div></div>
-          <div class="metric"><div class="metric-lbl">総来客数</div><div class="metric-val" id="s-guests">0</div><div class="metric-sub">人</div></div>
+          <div class="metric"><div class="metric-lbl">来客数合計</div><div class="metric-val" id="s-guests">0</div><div class="metric-sub">人</div></div>
           <div class="metric"><div class="metric-lbl">営業日数</div><div class="metric-val" id="s-days">0</div><div class="metric-sub">日</div></div>
         </div>
         <div class="card">
-          <div class="sec-head"><i class="ti ti-chart-bar"></i>売上推移（直近15件）</div>
+          <div class="sec-head"><i class="ti ti-chart-bar"></i>売上推移</div>
           <div class="chart-wrap"><canvas id="c-sales" role="img" aria-label="売上推移グラフ"></canvas></div>
         </div>
         <div class="card">
-          <div class="sec-head"><i class="ti ti-users"></i>来客数推移（直近15件）</div>
+          <div class="sec-head"><i class="ti ti-users"></i>来客数推移</div>
           <div class="chart-wrap" style="height:150px"><canvas id="c-guests" role="img" aria-label="来客数推移グラフ"></canvas></div>
         </div>
         <div class="card">
@@ -475,15 +477,17 @@ async function deleteEntry(date){
 
 // ===== 集計 =====
 function renderSummary(){
-  const totSales=data.reduce((a,r)=>a+(r.sales||r.total||0),0);
-  const totGuests=data.reduce((a,r)=>a+r.guests,0);
+  const fm=el('s-month').value;
+  const filtered=fm?data.filter(r=>r.date.startsWith(fm)):data;
+  const totSales=filtered.reduce((a,r)=>a+(r.sales||r.total||0),0);
+  const totGuests=filtered.reduce((a,r)=>a+r.guests,0);
   el('s-sales').textContent=yen(totSales);
   el('s-upa').textContent=totGuests>0?yen(totSales/totGuests):'—';
   el('s-guests').textContent=num(totGuests);
-  el('s-days').textContent=data.length;
+  el('s-days').textContent=filtered.length;
 
-  const recent=data.slice(-15);
-  const labels=recent.map(r=>r.date.slice(5));
+  const recent=filtered.slice(-15);
+  const labels=recent.map(r=>r.date.slice(8));
 
   if(cSales)cSales.destroy();
   cSales=new Chart(el('c-sales'),{
@@ -507,7 +511,7 @@ function renderSummary(){
 
   const dowTot={},dowCnt={};
   DAYS.forEach(d=>{dowTot[d]=0;dowCnt[d]=0});
-  data.forEach(r=>{const s=r.sales||r.total||0;dowTot[r.dow]=(dowTot[r.dow]||0)+s;dowCnt[r.dow]=(dowCnt[r.dow]||0)+1});
+  filtered.forEach(r=>{const s=r.sales||r.total||0;dowTot[r.dow]=(dowTot[r.dow]||0)+s;dowCnt[r.dow]=(dowCnt[r.dow]||0)+1});
   const avgs=DAYS.map(d=>dowCnt[d]>0?Math.round(dowTot[d]/dowCnt[d]):0);
   const maxAvg=Math.max(...avgs,1);
   el('dow-bars').innerHTML=DAYS.map((d,i)=>{

@@ -8,7 +8,8 @@ export class NetworkError extends Error {}
  * @param {{url: string, getToken: () => string|null, getDeviceId: () => string, getMgrToken: () => string|null}} cfg
  */
 export function createApi(cfg) {
-  return async function post(action, body = {}, { timeoutMs = 20000 } = {}) {
+  // GASは混んでいると返事に20秒近くかかることがある（実測1.5〜18秒）。送信待ちは失敗しても後で送り直す
+  return async function post(action, body = {}, { timeoutMs = 40000 } = {}) {
     if (!cfg.url) throw new ApiError('no_url', 'GASのURLが設定されていません（config.js）。');
     const payload = { action, token: cfg.getToken(), deviceId: cfg.getDeviceId(), mgrToken: cfg.getMgrToken(), ...body };
     const ctrl = new AbortController();

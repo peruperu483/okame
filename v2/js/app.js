@@ -200,10 +200,15 @@ function showSetup() {
       const tok = input.value.trim();
       if (!tok) { msg.textContent = '共有トークンを入れてください。'; return; }
       btn.disabled = true;
-      msg.textContent = 'つないでいます…';
+      msg.textContent = 'つないでいます…（GASが混んでいると20秒ほどかかります）';
       app.token = tok;
       try {
-        const r = await post('bootstrap');
+        // 1回目が通信の失敗なら、もう一度だけ自動でつなぐ
+        const r = await post('bootstrap').catch(e => {
+          if (!(e instanceof NetworkError)) throw e;
+          msg.textContent = 'もう一度つないでいます…';
+          return post('bootstrap');
+        });
         await store.kvSet('token', tok);
         await store.kvSet('settings', r.settings);
         app.settings = r.settings;

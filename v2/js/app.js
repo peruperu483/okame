@@ -8,12 +8,13 @@ import { createSync } from './sync.js';
 import { createAuth } from './auth.js';
 import { renderSettings } from './screens/settings.js';
 import { renderPlaceholder } from './screens/placeholder.js';
+import { renderVisits } from './screens/visits.js';
 
 const later = (title, when) => (root) => renderPlaceholder(root, title, when);
 
 // access: open=いつでも / 設定の見せる範囲のキー / settings=暗証番号
 const SCREENS = [
-  { id: 'visits', label: '来客・会計', access: 'open', render: later('来客・会計', '試運転（10月最後の週）までに作ります。') },
+  { id: 'visits', label: '来客・会計', access: 'open', render: renderVisits },
   { id: 'events', label: '予定', access: 'open', render: later('予定', '11月の第1週に足します。') },
   { id: 'purchases', label: '仕入れ', access: 'open', render: later('仕入れ', '11月の第2週に足します。') },
   { id: 'attendance', label: '勤怠', access: 'attendance', render: later('勤怠', '11月の第2週に足します。') },
@@ -98,6 +99,7 @@ function boot() {
   sync.refreshCounts();
   sync.flush();
   app.refreshSettings().catch(() => {});
+  sync.pull('staff').catch(() => {}); // 閉店のときに選ぶスタッフ
 }
 
 // ===== 外枠 =====

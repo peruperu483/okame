@@ -1,12 +1,13 @@
 // 通信が切れてもアプリを開けるように、画面のファイルを端末に置いておく。
 // 画面のファイルを変えたら VERSION を上げる（上げないと古い画面が出続ける）。
 // GAS（script.google.com）への通信はここでは扱わない。
-const VERSION = 'v0.1.0';
+const VERSION = 'v0.2.0';
 const CACHE = 'okame-' + VERSION;
 const FILES = [
   './', './index.html', './config.js', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/util.js', './js/bizday.js', './js/store.js', './js/api.js', './js/sync.js', './js/auth.js',
-  './js/screens/settings.js', './js/screens/placeholder.js',
+  './js/calc.js', './js/ui.js',
+  './js/screens/settings.js', './js/screens/placeholder.js', './js/screens/visits.js', './js/screens/closing.js',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'
 ];
 

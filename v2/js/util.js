@@ -19,6 +19,11 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
+/** 中身を入れ替える。null・false・空文字・入れ子の配列は気にせず渡してよい */
+export function put(el, ...children) {
+  el.replaceChildren(...children.flat(Infinity).filter(c => c != null && c !== false && c !== ''));
+}
+
 export const yen = n => '¥' + Math.round(Number(n) || 0).toLocaleString('ja-JP');
 
 export function uuid() {

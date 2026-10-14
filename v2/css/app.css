@@ -200,3 +200,111 @@ button { cursor: pointer; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { background: var(--err); }
 @media (orientation: landscape) and (min-width: 800px) { .toast { bottom: 24px; } }
+
+[hidden] { display: none !important; }
+.btn-outline { border: 2px solid var(--accent); color: var(--accent); }
+.btn-danger { color: var(--err); border-color: #E7B4AF; }
+
+/* 切り替えボタン */
+.seg { display: inline-flex; background: var(--bg2); border-radius: 12px; padding: 4px; gap: 4px; }
+.seg button { min-height: 48px; padding: 0 18px; border: none; background: none; border-radius: 9px; font-size: 17px; font-weight: 600; color: var(--text2); }
+.seg button.on { background: var(--bg); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+.seg.lg { display: flex; }
+.seg.lg button { flex: 1; min-height: var(--tap); }
+
+/* 人数などの増減 */
+.stepper { display: flex; align-items: center; gap: 12px; }
+.stepper-btn { width: 64px; padding: 0; font-size: 28px; }
+.stepper-num { min-width: 64px; text-align: center; font-size: 32px; font-weight: 800; }
+
+/* 金額 */
+.input.amount { max-width: 280px; min-height: 68px; font-size: 30px; font-weight: 800; text-align: right; font-variant-numeric: tabular-nums; }
+.input.bad { border-color: var(--err); outline: 3px solid var(--err-bg); }
+.textarea { min-height: 88px; padding: 12px 14px; resize: vertical; }
+
+/* パネル */
+.sheet.wide { max-width: 720px; }
+.sheet-sub { display: block; margin-top: 2px; font-size: 15px; font-weight: 500; color: var(--text2); }
+.sheet .field:first-of-type { border-top: none; }
+.reason-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 12px 0; }
+
+/* ===== 来客・会計 ===== */
+.page.visits { max-width: 1280px; padding-top: 16px; }
+.visits-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "entry" "main" "summary"; }
+.area-main { grid-area: main; min-width: 0; }
+.area-entry { grid-area: entry; }
+.area-summary { grid-area: summary; }
+.area-entry .card, .area-summary .card { margin-bottom: 0; }
+@media (orientation: landscape) and (min-width: 800px) {
+  .visits-grid { grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto 1fr; grid-template-areas: "main entry" "main summary"; align-items: start; }
+}
+
+.entry-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.entry-row .input { flex: 1 1 160px; }
+.people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; margin-top: 12px; }
+@media (orientation: landscape) and (min-width: 800px) { .people-grid { grid-template-columns: repeat(3, 1fr); } }
+.people-btn { min-height: 72px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); font-size: 16px; font-weight: 600; color: var(--text2); }
+.people-btn b { margin-right: 2px; font-size: 30px; color: var(--text); }
+.people-btn:active { background: var(--accent-weak); }
+.people-btn.more { font-size: 17px; color: var(--text); }
+
+.day-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.day-label { padding: 0 8px; font-size: 18px; font-weight: 700; }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--bg2); font-weight: 600; }
+.banner.done { background: var(--accent-weak); color: var(--accent); }
+.banner.warn { background: var(--warn-bg); color: var(--warn); }
+
+.tabs { display: flex; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.tab { flex: 1; min-height: var(--tap); border: none; border-bottom: 3px solid transparent; background: none; font-size: 18px; font-weight: 700; color: var(--text3); }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.vlist { display: flex; flex-direction: column; gap: 10px; }
+.vcard { display: flex; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg); }
+.vcard-main { flex: 1; display: flex; align-items: center; gap: 16px; min-width: 0; min-height: 92px; padding: 12px 0 12px 16px; border: none; background: none; text-align: left; }
+.vcard-people { min-width: 76px; font-size: 44px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.vcard-people small { margin-left: 2px; font-size: 18px; font-weight: 700; }
+.vcard-info { flex: 1; min-width: 0; }
+.vcard-name { font-size: 19px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vcard-sub { font-size: 15px; color: var(--text2); }
+.vcard-time { text-align: right; }
+.t-label { font-size: 14px; font-weight: 700; color: var(--text2); }
+.t-val { font-size: 34px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.vcard-go { align-self: stretch; display: flex; align-items: center; padding: 0 14px; border-left: 1px solid var(--line); font-weight: 700; color: var(--accent); }
+.vcard-more { width: 72px; flex: none; border: none; border-left: 1px solid var(--line); background: var(--bg2); font-weight: 600; color: var(--text2); }
+.vcard.k-single .t-val { font-size: 26px; color: var(--text2); }
+/* ラストオーダー：黄、時間超過：赤（色だけでなく文字でも出す） */
+.vcard.k-lo { border-color: #E9B04A; background: var(--warn-bg); }
+.vcard.k-lo .t-label, .vcard.k-lo .t-val { color: var(--warn); }
+.vcard.k-over { border: 2px solid var(--err); background: var(--err-bg); }
+.vcard.k-over .t-label, .vcard.k-over .t-val { color: var(--err); }
+.vcard.k-lo .vcard-more, .vcard.k-over .vcard-more { background: rgba(255,255,255,.55); }
+
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 14px; min-height: 64px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); text-align: left; font-size: 17px; }
+.prow-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow-pay { display: flex; align-items: center; gap: 6px; color: var(--text2); }
+.prow-time { color: var(--text2); font-variant-numeric: tabular-nums; }
+.prow-amount { min-width: 96px; text-align: right; font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+.sum-main { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.sum-label { margin-right: 8px; font-size: 15px; color: var(--text2); }
+.sum-big { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.sum-pair { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 10px; }
+.sum-pair b { font-size: 24px; }
+.sum-kv { margin-bottom: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+/* ===== 閉店・レジ締め ===== */
+.sum-table { width: 100%; margin-bottom: 8px; border-collapse: collapse; }
+.sum-table th { padding: 6px 0; border-bottom: 1px solid var(--line); text-align: left; font-weight: 500; color: var(--text2); }
+.sum-table td { border-bottom: 1px solid var(--line); text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sum-table tr.strong th, .sum-table tr.strong td { font-size: 22px; color: var(--text); }
+.diff { margin: 4px 0 8px; padding: 12px 14px; border-radius: 10px; background: var(--bg2); font-size: 19px; font-weight: 700; }
+.diff.ok { background: var(--accent-weak); color: var(--accent); }
+.diff.warn { background: var(--warn-bg); color: var(--warn); }
+
+/* 縦向き：人数ボタンを1列に並べる（狭い画面では2段） */
+@media not all and (orientation: landscape) and (min-width: 800px) {
+  .people-grid { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .people-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}

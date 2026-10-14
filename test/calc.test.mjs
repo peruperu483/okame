@@ -153,3 +153,36 @@ test('締めのあとに会計が変わったか', () => {
   assert.equal(closingIsStale({ sales: 9000, cash: 9000, groups: 2, guests: 3 }, sum), false);
   assert.equal(closingIsStale({ sales: 6000, cash: 6000, groups: 1, guests: 2 }, sum), true);
 });
+
+test('勤怠：時間×時給＋押した日の交通費。手打ちはその金額。月の集計は固定のスタッフを1人ずつ', async () => {
+  const { fmtHours, attendanceCost, attendanceSummary } = await import('../v2/js/calc.js');
+  assert.equal(fmtHours(6), '6時間');
+  assert.equal(fmtHours(6.5), '6時間30分');
+  assert.equal(attendanceCost({ kind: '固定', hours: 6.5, wage: 2000, transport: 2000 }), 15000);
+  assert.equal(attendanceCost({ kind: '固定', hours: 6, wage: 2000, transport: 0 }), 12000);
+  assert.equal(attendanceCost({ kind: '手打ち', amount: 8000 }), 8000);
+  const s = attendanceSummary([
+    { kind: '固定', staffId: 's1', name: '加奈', hours: 6, wage: 2000, transport: 2000 },
+    { kind: '固定', staffId: 's1', name: '加奈', hours: 6.5, wage: 2000, transport: 0 },
+    { kind: '手打ち', name: 'みか', amount: 8000 },
+    { kind: '手打ち', name: 'あいか', amount: 9000 },
+    { kind: '手打ち', name: 'みか', amount: 1000, status: '削除' }
+  ]);
+  assert.deepEqual(s.fixed, [{ name: '加奈', days: 2, hours: 12.5, transport: 2000, transportDays: 1, cost: 27000 }]);
+  assert.deepEqual(s.others, { count: 2, names: ['みか', 'あいか'], cost: 17000 });
+  assert.equal(s.total, 44000);
+});
+
+test('仕入れ：その他は内容が必須。月の集計は科目ごと', async () => {
+  const { validatePurchase, purchaseSummary } = await import('../v2/js/calc.js');
+  assert.equal(validatePurchase({ amount: 1000, category: 'その他', note: '' }), 'その他の内容を入れてください。');
+  assert.equal(validatePurchase({ amount: 0, category: '飲食物' }), '金額を入れてください。');
+  assert.equal(validatePurchase({ amount: 1000, category: '備品' }), '');
+  const s = purchaseSummary([
+    { category: '飲食物', amount: 24800 }, { category: '飲食物', amount: 6420 }, { category: '備品', amount: 1650 },
+    { category: 'その他', note: '花', amount: 3300 }, { category: 'その他', note: '修理', amount: 5000, status: '削除' }
+  ]);
+  assert.deepEqual(s.by['飲食物'], { count: 2, amount: 31220, notes: [] });
+  assert.deepEqual(s.by['その他'], { count: 1, amount: 3300, notes: ['花'] });
+  assert.equal(s.total, 36170);
+});

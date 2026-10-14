@@ -186,3 +186,57 @@ export function closingIsStale(closing, summary) {
   if (!closing) return false;
   return n(closing.sales) !== summary.sales || n(closing.cash) !== summary.cash || n(closing.groups) !== summary.groups || n(closing.guests) !== summary.guests;
 }
+
+// ===== 勤怠 =====
+export const ATT_FIXED = '固定';
+export const ATT_OTHER = '手打ち';
+
+/** 6.5 → 6時間30分 */
+export function fmtHours(h) {
+  const v = Number(h) || 0;
+  return `${Math.floor(v)}時間` + (v % 1 ? '30分' : '');
+}
+
+/** 人件費：固定のスタッフは 勤務時間×時給＋（押した日だけ）交通費、ほかは手打ちの金額 */
+export function attendanceCost(a) {
+  return a.kind === ATT_OTHER ? n(a.amount) : Math.round(n(a.hours) * n(a.wage)) + n(a.transport);
+}
+
+/** 月の勤怠の集計：固定のスタッフは1人ずつ、ほかは1つにまとめる（スプシの月次と同じ分け方） */
+export function attendanceSummary(rows) {
+  const live = rows.filter(r => r.status !== ST_DEL);
+  const fixed = new Map();
+  for (const r of live.filter(x => x.kind !== ATT_OTHER)) {
+    const k = r.staffId || r.name;
+    const s = fixed.get(k) || { name: r.name, days: 0, hours: 0, transport: 0, transportDays: 0, cost: 0 };
+    s.days += 1; s.hours += n(r.hours); s.transport += n(r.transport); s.transportDays += n(r.transport) ? 1 : 0; s.cost += attendanceCost(r);
+    fixed.set(k, s);
+  }
+  const others = live.filter(x => x.kind === ATT_OTHER);
+  return {
+    fixed: [...fixed.values()],
+    others: { count: others.length, names: [...new Set(others.map(o => o.name))], cost: others.reduce((a, o) => a + attendanceCost(o), 0) },
+    total: live.reduce((a, r) => a + attendanceCost(r), 0)
+  };
+}
+
+// ===== 仕入れ =====
+export const PURCHASE_CATS = ['飲食物', '備品', 'その他'];
+
+export function validatePurchase({ amount, category, note }) {
+  if (!isInt(amount) || Number(amount) <= 0) return '金額を入れてください。';
+  if (!PURCHASE_CATS.includes(category)) return '科目を選んでください。';
+  if (category === 'その他' && !String(note || '').trim()) return 'その他の内容を入れてください。';
+  return '';
+}
+
+export function purchaseSummary(rows) {
+  const live = rows.filter(r => r.status !== ST_DEL);
+  const by = Object.fromEntries(PURCHASE_CATS.map(c => [c, { count: 0, amount: 0, notes: [] }]));
+  for (const r of live) {
+    const c = by[r.category] ? r.category : 'その他';
+    by[c].count += 1; by[c].amount += n(r.amount);
+    if (c === 'その他' && r.note && !by[c].notes.includes(r.note)) by[c].notes.push(r.note);
+  }
+  return { by, total: live.reduce((a, r) => a + n(r.amount), 0) };
+}

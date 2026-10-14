@@ -6,20 +6,20 @@ import { idbStore } from './store.js';
 import { createApi, ApiError, NetworkError } from './api.js';
 import { createSync } from './sync.js';
 import { createAuth } from './auth.js';
-import { renderPlaceholder } from './screens/placeholder.js';
 import { renderPinGate } from './screens/pin.js';
 import { renderMore } from './screens/more.js';
 import { renderStore } from './screens/store.js';
 import { renderToday } from './screens/today.js';
+import { renderPlan } from './screens/plan.js';
+import { renderAna } from './screens/ana.js';
 
-const later = (title, when) => (root) => renderPlaceholder(root, title, when);
 
 // メニュー（雛形どおりの順）。lock=暗証番号（店長だけ）
 const SCREENS = [
   { id: 'today', label: '今日', render: renderToday },
   { id: 'store', label: '店内', render: renderStore },
-  { id: 'plan', label: '予定', render: later('予定', '11月の第1週に作ります。店内の入店で、今日の予定から選べるようになります。') },
-  { id: 'ana', label: '分析', lock: true, render: later('分析', '11月の月次と一緒に作ります。') },
+  { id: 'plan', label: '予定', render: renderPlan },
+  { id: 'ana', label: '分析', lock: true, render: renderAna },
   { id: 'more', label: 'その他', lock: true, render: renderMore }
 ];
 

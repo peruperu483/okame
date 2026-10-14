@@ -24,7 +24,8 @@ export function put(el, ...children) {
   el.replaceChildren(...children.flat(Infinity).filter(c => c != null && c !== false && c !== ''));
 }
 
-export const yen = n => '¥' + Math.round(Number(n) || 0).toLocaleString('ja-JP');
+/** 金額の表示。マイナスは「−¥1,000」 */
+export const yen = n => { const v = Math.round(Number(n) || 0); return (v < 0 ? '−' : '') + '¥' + Math.abs(v).toLocaleString('ja-JP'); };
 
 export function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();

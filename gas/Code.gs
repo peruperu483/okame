@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.4.0';
+var APP_VERSION = '0.5.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -187,6 +187,7 @@ function onOpen() {
     .addItem('共有トークンを表示', 'showToken')
     .addItem('暗証番号を作り直す', 'resetPin')
     .addSeparator()
+    .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
     .addSeparator()
     .addItem('テストの行を消す', 'deleteTestRows')
@@ -639,6 +640,177 @@ function formatDateCell_(d) {
   return hms === '00:00:00' ? Utilities.formatDate(d, TZ, 'yyyy-MM-dd') : Utilities.formatDate(d, TZ, "yyyy-MM-dd'T'HH:mm:ssXXX");
 }
 
+// ===== 管理シート（シフト及び売上等）の取り込み（9月・10月） =====
+// 何度やり直しても二重にならない：取り込むたびに、その月の「過去の日別」の行と「過去の月次」の列をまるごと置き換える
+// 列の位置ではなく見出しの名前で読む（9月と10月で列の並びが違う）。先の日付（予定の金額）は取り込まない
+var LEGACY_DAILY_SHEET = '過去の日別';
+var LEGACY_TABS = { '9月': '2026-09', '10月': '2026-10' };
+// 見出し（改行・空白を除いたもの）→ 取り込み先。未確認のものは docs/取り込みの対応表.md に書いてある
+var LEGACY_COLS = {
+  '団体及びイベント': 'event', '加奈': 'laborKana', 'スタッフ': 'laborOther',
+  '現金売上': 'cash', '売上': 'cash', // 10月の「売上」は現金として読む（未確認）
+  '団体売上': 'group', 'キャッシュレス売上': 'cashless', 'ポイント売上': 'point',
+  '食品支出': 'food', 'その他支出': 'other',
+  '家賃': 'fixed:家賃電気', '家賃電気': 'fixed:家賃電気',
+  'ガス電気カラオケ': 'fixed:ガス・カラオケ・Wi-Fi・電話', 'ガス・カラオケ・Wi-Fi・電話': 'fixed:ガス・カラオケ・Wi-Fi・電話',
+  '保険': 'fixed:保険'
+};
+var LEGACY_DAILY_COLS = ['日付', '曜日', 'シフト', '店休日', 'イベント', '人件費（加奈）', '人件費（その他）', '現金売上', '団体売上',
+  'キャッシュレス売上', 'ポイント売上', '飲食物（食品支出）', 'その他支出', '家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険', '取り込んだ日時'];
+
+/** 1つの月のタブ（2次元の値）を読む。today より先の日付は読まない */
+function parseLegacyTab_(values, month, today) {
+  var norm = function (h) { return String(h == null ? '' : h).replace(/[\s　]/g, ''); };
+  var header = values[0].map(norm);
+  var col = {}, unknown = [];
+  header.forEach(function (h, i) {
+    if (i < 2 || !h) return;
+    if (LEGACY_COLS[h]) col[LEGACY_COLS[h]] = i;
+  });
+  var eventCol = col.event != null ? col.event : 6;
+  header.forEach(function (h, i) {
+    if (i >= 2 && i < eventCol) return; // シフトの欄（列1〜列4・1・2・3・3 2 など）
+    if (i >= 2 && h && !LEGACY_COLS[h]) unknown.push(h);
+  });
+  var n = function (v) { var x = Number(v); return isNaN(x) ? 0 : x; };
+  var days = [];
+  for (var r = 1; r < values.length; r++) {
+    var a = values[r][0];
+    if (String(a).indexOf('合計') >= 0) break;
+    var d = Number(a);
+    if (!d || d < 1 || d > 31) continue;
+    var date = month + '-' + (d < 10 ? '0' : '') + d;
+    if (date > today) break;
+    var shift = [];
+    for (var c = 2; c < eventCol; c++) { var nm = String(values[r][c] || '').trim(); if (nm) shift.push(nm); }
+    var closed = shift.indexOf('店休日') >= 0;
+    var fixed = {};
+    Object.keys(col).forEach(function (k) { if (k.indexOf('fixed:') === 0) fixed[k.slice(6)] = (fixed[k.slice(6)] || 0) + n(values[r][col[k]]); });
+    var get = function (k) { return col[k] != null ? n(values[r][col[k]]) : 0; };
+    days.push({
+      date: date, dow: String(values[r][1] || ''), shift: shift.filter(function (x) { return x !== '店休日'; }), closed: closed,
+      event: col.event != null ? String(values[r][col.event] || '').trim() : '',
+      laborKana: get('laborKana'), laborOther: get('laborOther'), cash: get('cash'), group: get('group'),
+      cashless: get('cashless'), point: get('point'), food: get('food'), other: get('other'), fixed: fixed
+    });
+  }
+  return { days: days, unknown: unknown };
+}
+
+/** 日ごとの行から、月の合計（「過去の月次」の1列）を作る */
+function legacyMonthTotals_(days, settings) {
+  var sum = function (k) { return days.reduce(function (a, d) { return a + d[k]; }, 0); };
+  var fixed = {};
+  days.forEach(function (d) { Object.keys(d.fixed).forEach(function (k) { fixed[k] = (fixed[k] || 0) + d.fixed[k]; }); });
+  var open = days.filter(function (d) { return !d.closed && d.shift.length; });
+  var salesOf = function (d) { return d.cash + d.group + d.cashless + (settings.pointCountsAsSales === false ? 0 : d.point); };
+  var t = {
+    '売上': days.reduce(function (a, d) { return a + salesOf(d); }, 0),
+    '現金': sum('cash'), 'キャッシュレス': sum('cashless'), 'ポイント': sum('point'), 'イベント': sum('group'),
+    'イベントの組数': days.filter(function (d) { return d.event; }).length,
+    '来客数': 0, '組数': 0,
+    '営業日数': open.length, '店休日': days.filter(function (d) { return d.closed; }).length,
+    '売上0円の営業日': open.filter(function (d) { return salesOf(d) === 0; }).map(function (d) { return d.date; }).join('、'),
+    '飲食物': sum('food'), '備品': 0, 'その他': sum('other'),
+    '人件費（加奈）': sum('laborKana'), '人件費（その他）': sum('laborOther')
+  };
+  Object.keys(fixed).forEach(function (k) { t['固定費：' + k] = fixed[k]; });
+  return t;
+}
+
+/** 取り込み（ロックの中で呼ぶ）。source は管理シート（Spreadsheet）。結果を返す */
+function importLegacy_(source, today) {
+  var settings = getSettings_();
+  var ss = SpreadsheetApp.getActive();
+  var stamp = nowIso_();
+  var result = [];
+  // 過去の日別
+  var daily = ss.getSheetByName(LEGACY_DAILY_SHEET) || ss.insertSheet(LEGACY_DAILY_SHEET);
+  if (daily.getLastRow() === 0) daily.getRange(1, 1, 1, LEGACY_DAILY_COLS.length).setValues([LEGACY_DAILY_COLS]);
+  daily.setFrozenRows(1);
+  // 過去の月次
+  var monthly = ss.getSheetByName(LEGACY_SHEET) || ss.insertSheet(LEGACY_SHEET);
+  if (monthly.getLastRow() === 0) monthly.getRange(1, 1, 1, 1).setValues([['項目']]);
+  monthly.setFrozenRows(1);
+  monthly.setFrozenColumns(1);
+
+  Object.keys(LEGACY_TABS).forEach(function (tab) {
+    var month = LEGACY_TABS[tab];
+    var sh = source.getSheetByName(tab);
+    if (!sh) { result.push({ tab: tab, month: month, error: 'タブ「' + tab + '」が見つかりません' }); return; }
+    var parsed = parseLegacyTab_(sh.getDataRange().getValues(), month, today);
+    // 過去の日別：この月の行を消して、書き直す
+    var last = daily.getLastRow();
+    if (last > 1) {
+      var dates = daily.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return String(r[0]).slice(0, 7); });
+      for (var i = dates.length - 1; i >= 0; i--) {
+        if (dates[i] !== month) continue;
+        var end = i;
+        while (i - 1 >= 0 && dates[i - 1] === month) i--;
+        daily.deleteRows(i + 2, end - i + 1);
+      }
+    }
+    if (parsed.days.length) {
+      var rows = parsed.days.map(function (d) {
+        return [d.date, d.dow, d.shift.join('、'), d.closed ? '店休日' : '', d.event, d.laborKana, d.laborOther, d.cash, d.group, d.cashless, d.point,
+          d.food, d.other, d.fixed['家賃電気'] || 0, d.fixed['ガス・カラオケ・Wi-Fi・電話'] || 0, d.fixed['保険'] || 0, stamp];
+      });
+      var formats = rows.map(function () { return LEGACY_DAILY_COLS.map(function (c, j) { return j <= 4 || j === 16 ? '@' : '#,##0'; }); });
+      appendRows_(daily, rows, formats);
+    }
+    // 過去の月次：この月の列をまるごと書き直す
+    var totals = legacyMonthTotals_(parsed.days, settings);
+    totals['取り込んだ日'] = stamp.slice(0, 10);
+    totals['取り込んだ範囲'] = parsed.days.length ? parsed.days[0].date + '〜' + parsed.days[parsed.days.length - 1].date : 'なし';
+    writeLegacyColumn_(monthly, month, totals);
+    result.push({ tab: tab, month: month, days: parsed.days.length, until: totals['取り込んだ範囲'], sales: totals['売上'], unknown: parsed.unknown });
+  });
+  protect_(daily);
+  protect_(monthly);
+  return result;
+}
+
+/** 「過去の月次」の、その月の列を書く（項目の行がなければ足す。ほかの月の列はそのまま） */
+function writeLegacyColumn_(sh, month, totals) {
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return h instanceof Date ? Utilities.formatDate(h, TZ, 'yyyy-MM') : String(h); });
+  var c = header.indexOf(month);
+  if (c < 0) { c = header.length; sh.getRange(1, c + 1).setNumberFormat('@').setValue(month); }
+  var lastRow = sh.getLastRow();
+  var labels = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
+  Object.keys(totals).forEach(function (k) {
+    if (labels.indexOf(k) < 0) { labels.push(k); sh.getRange(labels.length + 1, 1).setNumberFormat('@').setValue(k); }
+  });
+  var col = labels.map(function (k) { return [k in totals ? totals[k] : '']; });
+  if (!col.length) return;
+  // 文字（日付の並びなど）は書式なしテキストにしないと、スプシが日付に変えてしまう
+  var rng = sh.getRange(2, c + 1, col.length, 1);
+  rng.setNumberFormats(col.map(function (r) { return [typeof r[0] === 'number' ? '#,##0' : '@']; }));
+  rng.setValues(col);
+}
+
+/** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
+function importLegacy() {
+  var ui = SpreadsheetApp.getUi();
+  var props = PropertiesService.getScriptProperties();
+  var url = props.getProperty('LEGACY_URL');
+  var ask = !url || ui.alert('管理シートから取り込む', '前と同じ管理シートから取り込みますか？\n（「いいえ」で、URLを入れ直します）', ui.ButtonSet.YES_NO) !== ui.Button.YES;
+  if (ask) {
+    var r = ui.prompt('管理シートから取り込む', '管理シート「シフト及び売上等」のURLを貼ってください。', ui.ButtonSet.OK_CANCEL);
+    if (r.getSelectedButton() !== ui.Button.OK || !r.getResponseText().trim()) { ui.alert('やめました。'); return; }
+    url = r.getResponseText().trim();
+  }
+  var source;
+  try { source = SpreadsheetApp.openByUrl(url); } catch (e) { ui.alert('管理シートを開けませんでした。URLを確かめてください。\n' + e.message); return; }
+  props.setProperty('LEGACY_URL', url);
+  var today = serverBizDate_(getSettings_());
+  var res = withLock_(function () { return importLegacy_(source, today); });
+  ui.alert('取り込みました（' + today + ' まで）\n\n' + res.map(function (x) {
+    if (x.error) return x.tab + '：' + x.error;
+    return x.tab + '：' + x.days + '日分（' + x.until + '）・売上 ' + Number(x.sales).toLocaleString() + '円' + (x.unknown.length ? '\n　読めなかった列：' + x.unknown.join('、') : '');
+  }).join('\n') + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
+}
+
 // ===== 月次 =====
 // アプリの分析画面とスプシの「月次」タブは、どちらもここで計算する（数字を1か所にそろえる）
 // 運用開始日より前の記録（試運転）は数えない。8〜10月は「過去の月次」タブ（管理シートからの取り込み）から読む
@@ -731,30 +903,32 @@ function finishSummary_(s, settings) {
   return s;
 }
 
-/** 「過去の月次」タブ（1列目が項目、2行目から。1行目が月 YYYY-MM）から、その月の数字を読む。なければ null */
+/** 「過去の月次」タブ（1列目が項目、1行目が月 YYYY-MM。管理シートの取り込みで作る）から、その月の数字を読む。なければ null */
 function legacySummary_(month) {
   var sh = SpreadsheetApp.getActive().getSheetByName(LEGACY_SHEET);
   if (!sh || sh.getLastRow() < 2) return null;
   var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
   var col = vals[0].map(function (h) { return h instanceof Date ? Utilities.formatDate(h, TZ, 'yyyy-MM') : String(h).slice(0, 7); }).indexOf(month);
   if (col < 1) return null;
-  var get = function (label) {
-    for (var i = 1; i < vals.length; i++) if (String(vals[i][0]).trim() === label) return Number(vals[i][col]) || 0;
-    return 0;
-  };
+  var rows = vals.slice(1).map(function (r) { return { label: String(r[0]).trim(), value: r[col] }; });
+  var get = function (label) { var r = rows.filter(function (x) { return x.label === label; })[0]; return r ? Number(r.value) || 0 : 0; };
+  var text = function (label) { var r = rows.filter(function (x) { return x.label === label; })[0]; return r ? String(r.value || '') : ''; };
   var s = {
     month: month, legacy: true, sales: get('売上'), guests: get('来客数'), groups: get('組数'),
     cash: get('現金'), cashless: get('キャッシュレス'), point: get('ポイント'),
     nomi: 0, tanpin: 0, event: get('イベント'), eventGroups: get('イベントの組数'), openDays: get('営業日数'),
-    closedDays: get('店休日'), zeroDays: [], purchases: { '飲食物': get('飲食物'), '備品': get('備品'), 'その他': get('その他') },
+    closedDays: get('店休日'), zeroDays: text('売上0円の営業日').split('、').filter(String),
+    purchases: { '飲食物': get('飲食物'), '備品': get('備品'), 'その他': get('その他') },
     otherNotes: [], fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: get('人件費（その他）'), count: 0, names: [] },
-    plannedEvents: 0
+    plannedEvents: 0, importedUntil: text('取り込んだ範囲')
   };
   s.purchaseTotal = s.purchases['飲食物'] + s.purchases['備品'] + s.purchases['その他'];
-  ['家賃', 'ガス電気カラオケ'].forEach(function (k) { var v = get(k); if (v) { s.fixed[k] = v; s.fixedTotal += v; } });
-  vals.slice(1).forEach(function (r) {
-    var m = /^人件費（(.+)）$/.exec(String(r[0]).trim());
-    if (m && m[1] !== 'その他') s.laborFixed.push({ name: m[1], days: 0, hours: 0, transport: 0, cost: Number(r[col]) || 0 });
+  rows.forEach(function (r) {
+    if (r.value === '' || r.value == null) return; // その月にない項目（9月の保険など）
+    var f = /^固定費：(.+)$/.exec(r.label);
+    if (f) { s.fixed[f[1]] = Number(r.value) || 0; s.fixedTotal += Number(r.value) || 0; }
+    var l = /^人件費（(.+)）$/.exec(r.label);
+    if (l && l[1] !== 'その他') s.laborFixed.push({ name: l[1], days: 0, hours: 0, transport: 0, cost: Number(r.value) || 0 });
   });
   s.laborTotal = s.laborOthers.cost + s.laborFixed.reduce(function (a, r) { return a + r.cost; }, 0);
   return finishSummary_(s, getSettings_());
@@ -773,7 +947,8 @@ function buildMonthlySheet_() {
     });
   }
   var months = [];
-  var last = now > first ? now : first; // 運用開始の前でも、少なくとも運用開始の月は作る
+  var goMonth = String(settings.goLiveDate || now).slice(0, 7);
+  var last = now > goMonth ? now : goMonth; // 運用開始の前でも、運用開始の月までは作る
   for (var m = first; m <= last; m = nextMonth_(m)) months.push(m);
   var sums = months.map(function (mm) { return monthlySummary_(mm, settings); });
   var staffNames = [], fixedItems = [];

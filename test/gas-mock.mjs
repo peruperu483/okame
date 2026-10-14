@@ -29,6 +29,7 @@ class Range {
     return this;
   }
   setFontWeight() { return this; }
+  setValue(v) { this.sheet._set(this.r, this.c, v); return this; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sheet.cells.delete(this.sheet._key(this.r + i, this.c + j)); return this; }
 }
 
@@ -47,6 +48,7 @@ class Sheet {
   }
   _fmt(r, c, f) { this._check(r); this.formats.set(this._key(r, c), f); }
   getRange(r, c, nr = 1, nc = 1) { this._check(r + nr - 1); return new Range(this, r, c, nr, nc); }
+  getDataRange() { return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
   getLastRow() { let m = 0; for (const k of this.cells.keys()) m = Math.max(m, Number(k.split(':')[0])); return m; }
   getLastColumn() { let m = 0; for (const k of this.cells.keys()) m = Math.max(m, Number(k.split(':')[1])); return m; }
   getMaxRows() { return this.maxRows; }
@@ -147,4 +149,14 @@ export function loadGas(file) {
   // GASの「今」を決める（テストを日付に左右されないように）
   const setNow = iso => { ctx.now_ = () => new Date(iso); };
   return { gas: ctx, ss, sheets, props, cache, logs, post, setNow };
+}
+
+/** 別のスプレッドシート（管理シートなど）のまね。tabs = { タブ名: 2次元の値 } */
+export function makeSpreadsheet(tabs) {
+  const sheets = Object.entries(tabs).map(([name, rows]) => {
+    const sh = new Sheet(name);
+    rows.forEach((row, i) => row.forEach((v, j) => { if (v !== '' && v != null) sh.cells.set(sh._key(i + 1, j + 1), v); }));
+    return sh;
+  });
+  return { getSheetByName: n => sheets.find(x => x.name === n) || null };
 }

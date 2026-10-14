@@ -386,3 +386,72 @@ test('月次：運用開始日より前の月は「過去の月次」タブ（�
   const built = env.call('buildMonthlySheet', { mgrToken });
   assert.deepEqual(built.months, ['2026-09', '2026-10', '2026-11']);
 });
+
+test('管理シートの取り込み：見出しの名前で読み、今日まで。何度やり直しても二重にならない', async () => {
+  const { makeSpreadsheet } = await import('./gas-mock.mjs');
+  const env = boot();
+  env.setNow('2026-10-14T20:00:00+09:00');
+  // 9月の並び（管理シートと同じ見出し。金額はテスト用）
+  const sep = [
+    ['8月', '列 1', '列 2', '列 3', '列 ４', '列 ', '団体及びイベント', '加奈', 'スタッフ', '現金\n売上', '団体\n売上', 'ポイント\n売上', '食品\n支出', 'その他\n支出', 'キャッシュ\nレス\n売上', '家賃', 'ガス\n電気\nカラオケ'],
+    [1, '火', '加奈', '', '', '', '', 12000, 0, 8000, 0, 0, 0, 0, 0, 200000, 30000],
+    [2, '水', '岡本', '', '', '', '', 0, 0, 10000, 0, 0, 1000, 0, 2000, 0, 0],
+    [3, '木', '店休日', '', '', '', '', 0, 0, 0, 0, 0, 0, 500, 0, 0, 0],
+    [4, '金', '岡本', '加奈', '', '', '6名団体', 13000, 5000, 20000, 30000, 1000, 2000, 0, 0, 0, 1000],
+    [5, '土', '岡本', '', '', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['合計', '', '', '', '', '', '', 25000, 5000, 38000, 30000, 1000, 3000, 500, 2000, 200000, 31000],
+    ['', '', '売上目標等', '売上目標'],
+  ];
+  // 10月の並び（列が違う。先の日付は予定）
+  const oct = [
+    ['10月', '列 1', '1', '2', '3', '3 2', '団体及びイベント', '加奈', 'スタッフ', '売上', '団体売上', 'キャッシュレス売上', 'ポイント\n売上', '食品支出', 'その他支出', '家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険', '新しい列'],
+    [1, '木', '岡本', '', '', '', '', 0, 0, 0, 0, 0, 0, 500, 100, 250000, 30000, 8000, 9],
+    [2, '金', '岡本', '加奈', '優輝', '', 'おかめでナイト', 15000, 0, 100000, 0, 5000, 0, 800, 0, 0, 4900, 0, 9],
+    [14, '水', '岡本', '', '', '', '', 0, 0, 25000, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [23, '金', '岡本', '加奈', '', '', '団体の予定', 12000, 0, 0, 250000, 0, 0, 0, 0, 0, 0, 0, 0], // 先の日付：取り込まない
+    ['合計']
+  ];
+  const source = makeSpreadsheet({ '9月': sep, '10月': oct });
+  // GASの中の配列は別の実行環境のものなので、比べる前にふつうの値に写す
+  const res = JSON.parse(JSON.stringify(env.gas.importLegacy_(source, '2026-10-14')));
+  assert.deepEqual(res.map(r => [r.tab, r.days, r.until]), [['9月', 5, '2026-09-01〜2026-09-05'], ['10月', 3, '2026-10-01〜2026-10-14']]);
+  assert.deepEqual(res[1].unknown, ['新しい列']);
+
+  const daily = env.ss.getSheetByName('過去の日別').dump();
+  assert.equal(daily.length, 8);
+  const d4 = daily.find(r => r['日付'] === '2026-09-04');
+  assert.deepEqual([d4['シフト'], d4['イベント'], d4['人件費（加奈）'], d4['現金売上'], d4['団体売上'], d4['ポイント売上']], ['岡本、加奈', '6名団体', 13000, 20000, 30000, 1000]);
+  assert.equal(daily.find(r => r['日付'] === '2026-09-03')['店休日'], '店休日');
+  assert.equal(daily.find(r => r['日付'] === '2026-09-01')['家賃電気'], 200000); // 9月の「家賃」は10月の分け方の「家賃電気」へ
+  assert.equal(daily.find(r => r['日付'] === '2026-10-02')['シフト'], '岡本、加奈、優輝');
+
+  // 月次（管理シートからの月）：9月
+  const mgrToken = env.login();
+  const sepSum = env.call('monthly', { mgrToken, month: '2026-09' }).summary;
+  assert.equal(sepSum.legacy, true);
+  assert.deepEqual([sepSum.sales, sepSum.cash, sepSum.cashless, sepSum.point, sepSum.event, sepSum.eventGroups], [38000 + 30000 + 2000 + 1000, 38000, 2000, 1000, 30000, 1]);
+  assert.deepEqual([sepSum.openDays, sepSum.closedDays, sepSum.zeroDays], [4, 1, ['2026-09-05']]);
+  assert.deepEqual(sepSum.purchases, { '飲食物': 3000, '備品': 0, 'その他': 500 });
+  assert.deepEqual(sepSum.fixed, { '家賃電気': 200000, 'ガス・カラオケ・Wi-Fi・電話': 31000 });
+  assert.deepEqual([sepSum.laborTotal, sepSum.laborFixed[0]], [30000, { name: '加奈', days: 0, hours: 0, transport: 0, cost: 25000 }]);
+  // 10月：今日まで（23日の予定の団体売上は入らない）
+  const octSum = env.call('monthly', { mgrToken, month: '2026-10' }).summary;
+  assert.deepEqual([octSum.sales, octSum.event, octSum.fixed['保険'], octSum.importedUntil], [130000, 0, 8000, '2026-10-01〜2026-10-14']);
+
+  // 管理シートに書き足して、もう一度取り込む → 二重にならず、置き換わる
+  oct.splice(4, 0, [15, '木', '加奈', '', '', '', '', 13000, 0, 30000, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  env.setNow('2026-10-15T20:00:00+09:00');
+  env.gas.importLegacy_(makeSpreadsheet({ '9月': sep, '10月': oct }), '2026-10-15');
+  env.gas.importLegacy_(makeSpreadsheet({ '9月': sep, '10月': oct }), '2026-10-15');
+  const daily2 = env.ss.getSheetByName('過去の日別').dump();
+  assert.equal(daily2.length, 9);
+  assert.equal(daily2.filter(r => r['日付'] === '2026-09-04').length, 1);
+  assert.equal(env.call('monthly', { mgrToken, month: '2026-10' }).summary.sales, 160000);
+  const legacy = env.ss.getSheetByName('過去の月次');
+  const vals = legacy.getRange(1, 1, legacy.getLastRow(), legacy.getLastColumn()).getValues();
+  assert.deepEqual(vals[0], ['項目', '2026-09', '2026-10']);
+  assert.equal(vals.filter(r => r[0] === '売上').length, 1);
+  // スプシの「月次」タブにも9月・10月が出る
+  assert.deepEqual(env.call('buildMonthlySheet', { mgrToken }).months, ['2026-09', '2026-10', '2026-11']);
+});

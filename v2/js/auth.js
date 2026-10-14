@@ -26,6 +26,8 @@ export function createAuth() {
   function lock() {
     const tok = session?.token;
     clearTimeout(idleTimer);
+    // 店長モードでないときは何もしない（画面を作り直すと、広げた卓や入力中の金額が消えるため）
+    if (!session) return;
     set(null);
     if (tok) post('logout', { mgrToken: tok }).catch(() => {});
   }

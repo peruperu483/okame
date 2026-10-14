@@ -2,8 +2,8 @@
 import { h, toast, uuid, yen } from '../util.js';
 
 const STAFF_TABLES = [
-  ['visits', '来客・会計'], ['closings', '閉店・レジ締め'], ['days', 'シフトの実績'], ['purchases', '仕入れ'],
-  ['events', '予定'], ['requests', '希望休'], ['attendance', '勤怠'], ['fixedCosts', '固定費']
+  ['visits', '来客・会計'], ['closings', '閉店・レジ締め'], ['days', 'シフトの実績・開店時の現金'], ['cashMoves', 'レジの出し入れ'],
+  ['events', '予定'], ['requests', '希望休']
 ];
 
 export function renderSettings(root, app) {
@@ -52,7 +52,6 @@ function renderPinGate(root, app) {
 function renderForm(root, app) {
   const draft = JSON.parse(JSON.stringify(app.settings));
   draft.staffEdit = draft.staffEdit || { days: 0, tables: [] }; // GASが古いときの守り
-  draft.changeFloat = draft.changeFloat ?? 0;
   const saveBtn = h('button', { class: 'btn btn-primary btn-lg', onclick: save }, '変更を保存');
   const saveBar = h('div', { class: 'save-bar' }, saveBtn);
   // 変更があるときだけ保存のバーを出す
@@ -108,9 +107,8 @@ function renderForm(root, app) {
     card('延長', h('p', { class: 'help' }, '料金と時間が決まったら足してください。会計のときに選べるようになります。'),
       extensionsEditor(draft, dirty)),
 
-    card('売上とレジ',
-      swOnOff('ポイントを売上に含める', () => draft.pointCountsAsSales, x => { draft.pointCountsAsSales = x; }),
-      num('釣り銭の準備金', () => draft.changeFloat, x => { draft.changeFloat = x; }, '円', 'レジに最初から入れておく現金です。レジ締めでは「レジの現金 − 準備金」と現金の売上を比べます。')),
+    card('売上',
+      swOnOff('ポイントを売上に含める', () => draft.pointCountsAsSales, x => { draft.pointCountsAsSales = x; })),
 
     card('バイトが直せる範囲',
       h('p', { class: 'help' }, '店長モードなら、いつの記録でも直せます。設定はいつも店長だけです。'),
@@ -127,11 +125,8 @@ function renderForm(root, app) {
           h('span', {}, label)))))),
 
     card('バイトに見せる範囲',
-      h('p', { class: 'help' }, '来客・会計、仕入れ、予定はいつも見せます。見せない画面は、店長モードのときだけ開けます。'),
+      h('p', { class: 'help' }, '今日・店内・予定はいつも見せます。分析とその他（勤怠・仕入れ・固定費・設定）は店長だけです。'),
       h('div', { class: 'vis' },
-        sw('勤怠', () => v.attendance, x => { v.attendance = x; }),
-        sw('固定費', () => v.fixedCosts, x => { v.fixedCosts = x; }),
-        sw('月次', () => v.monthly, x => { v.monthly = x; }),
         sw('予定の幹事の連絡先', () => v.eventContact, x => { v.eventContact = x; }))),
 
     card('目標',

@@ -19,14 +19,14 @@ function boot() {
 
 const visit = (id, extra = {}) => ({
   opId: 'op-' + id + '-' + Math.random(), table: 'visits', id,
-  data: { bizDate: '2026-11-01', no: 1, name: '', people: 2, plan: '飲み放題', inAt: '2026-11-01T19:00:00+09:00',
+  data: { bizDate: '2026-11-01', no: 1, name: '', people: 2, kind: '飲み放題', base: 6000, inAt: '2026-11-01T19:00:00+09:00',
     status: '店内', createdAt: '2026-11-01T19:00:00+09:00', updatedAt: '2026-11-01T19:00:00+09:00', ...extra }
 });
 
 test('初期設定でタブ・トークン・暗証番号ができ、2回実行しても増えない', () => {
   const env = boot();
   const names = env.sheets.map(s => s.name);
-  for (const n of ['来客', '締め', '営業日', 'スタッフ', '勤怠', '仕入れ', '固定費', '予定', '希望休', '操作履歴', '設定']) assert.ok(names.includes(n), n);
+  for (const n of ['来客', '締め', 'レジの出し入れ', '営業日', 'スタッフ', '勤怠', '仕入れ', '固定費', '予定', '希望休', '操作履歴', '設定']) assert.ok(names.includes(n), n);
   assert.ok(!names.includes('シート1'));
   const settingsRows = env.ss.getSheetByName('設定').dump().length;
   env.gas.setup();
@@ -68,16 +68,17 @@ test('同じものを何度送っても1件。日付は文字のまま残る', (
 test('一部だけ送ると他の項目は残る。古い更新は無視して今の値を返す', () => {
   const env = boot();
   env.call('sync', { ops: [visit('v1')] });
-  env.call('sync', { ops: [{ opId: 'a', table: 'visits', id: 'v1', data: { status: '会計済', amount: 6000, pay: '現金', updatedAt: '2026-11-01T21:00:00+09:00' } }] });
+  env.call('sync', { ops: [{ opId: 'a', table: 'visits', id: 'v1', data: { status: '退店', total: 6000, pays: [{ id: 'p1', method: '現金', amount: 6000 }], cash: 6000, updatedAt: '2026-11-01T21:00:00+09:00' } }] });
   let row = env.call('fetch', { table: 'visits' }).rows[0];
-  assert.equal(row.status, '会計済');
+  assert.equal(row.status, '退店');
   assert.equal(row.people, 2);
-  assert.equal(row.amount, 6000);
+  assert.equal(row.total, 6000);
+  assert.deepEqual(row.pays, [{ id: 'p1', method: '現金', amount: 6000 }]);
   const r = env.call('sync', { ops: [{ opId: 'b', table: 'visits', id: 'v1', data: { status: '店内', updatedAt: '2026-11-01T20:00:00+09:00' } }] });
   assert.equal(r.results[0].stale, true);
-  assert.equal(r.results[0].current.status, '会計済');
+  assert.equal(r.results[0].current.status, '退店');
   row = env.call('fetch', { table: 'visits' }).rows[0];
-  assert.equal(row.status, '会計済');
+  assert.equal(row.status, '退店');
 });
 
 test('同じ送信の中で新しい行を2回更新しても1件', () => {
@@ -116,34 +117,32 @@ test('暗証番号：違うと入れず、5回間違えると止まる。合え�
   assert.equal(env.call('bootstrap', { mgrToken }).mgr, false);
 });
 
-test('見せる範囲：勤怠を隠すとバイトは読み書きできず、店長はできる', () => {
+test('勤怠・仕入れ・固定費は店長だけが読み書きできる。設定の保存も店長だけ', () => {
   const env = boot();
   const mgrToken = env.login();
   const att = { opId: 'w', table: 'attendance', id: 'a1', data: { bizDate: '2026-11-01', name: '加奈', hours: 5, wage: 2000, cost: 10000 } };
-  assert.equal(env.call('saveSettings', { settings: { visibility: { attendance: false } } }).code, 'need_mgr');
-  const s = env.call('saveSettings', { mgrToken, settings: { visibility: { attendance: false } } });
-  assert.equal(s.settings.visibility.attendance, false);
-  assert.equal(s.settings.visibility.monthly, true);
-  assert.equal(env.call('fetch', { table: 'attendance' }).code, 'forbidden');
+  for (const table of ['attendance', 'purchases', 'fixedCosts']) assert.equal(env.call('fetch', { table }).code, 'forbidden', table);
   assert.equal(env.call('sync', { ops: [att] }).results[0].code, 'forbidden');
   assert.equal(env.call('sync', { mgrToken, ops: [att] }).results[0].ok, true);
   assert.equal(env.call('fetch', { table: 'attendance', mgrToken }).rows.length, 1);
+  assert.equal(env.call('saveSettings', { settings: { nomiPrice: 3500 } }).code, 'need_mgr');
+  env.call('saveSettings', { mgrToken, settings: { nomiPrice: 3500 } });
   const log = env.call('fetch', { table: 'log', mgrToken }).rows;
   assert.equal(log[0].type, '設定の変更');
   assert.equal(log[0].by, '店長');
 });
 
-test('時給は勤怠を隠すとバイトに返らない。スタッフの登録は店長だけ', () => {
+test('時給と交通費はバイトに返らない。スタッフの登録は店長だけ', () => {
   const env = boot();
   const mgrToken = env.login();
-  const staff = { opId: 's', table: 'staff', id: 's1', data: { name: '加奈', wage: 2200, active: true } };
+  const staff = { opId: 's', table: 'staff', id: 's1', data: { name: '加奈', wage: 2200, transport: 2000, active: true } };
   assert.equal(env.call('sync', { ops: [staff] }).results[0].code, 'forbidden');
   env.call('sync', { mgrToken, ops: [staff] });
-  assert.equal(env.call('fetch', { table: 'staff' }).rows[0].wage, 2200);
-  env.call('saveSettings', { mgrToken, settings: { visibility: { attendance: false } } });
+  assert.equal(env.call('fetch', { table: 'staff', mgrToken }).rows[0].wage, 2200);
   const row = env.call('fetch', { table: 'staff' }).rows[0];
   assert.equal(row.name, '加奈');
   assert.equal('wage' in row, false);
+  assert.equal('transport' in row, false);
   assert.equal(row.active, true);
 });
 
@@ -201,14 +200,15 @@ test('バイトが直せるのはその営業日の記録だけ。店長はい�
   const mgrToken = env.login();
   assert.equal(ok(env.call('sync', { mgrToken, ops: [visit('old', { bizDate: '2026-10-31' })] })), true);
   // 店長が作った前日の記録を、バイトは直せない（日付を今日に書き換えてもだめ）
-  assert.equal(env.call('sync', { ops: [{ opId: 'x', table: 'visits', id: 'old', data: { bizDate: '2026-11-01', amount: 0 } }] }).results[0].code, 'forbidden');
+  assert.equal(env.call('sync', { ops: [{ opId: 'x', table: 'visits', id: 'old', data: { bizDate: '2026-11-01', total: 0 } }] }).results[0].code, 'forbidden');
   // 範囲を「1日前まで」に広げると直せる
   env.call('saveSettings', { mgrToken, settings: { staffEdit: { days: 1 } } });
-  assert.equal(ok(env.call('sync', { ops: [{ opId: 'y', table: 'visits', id: 'old', data: { amount: 3000 } }] })), true);
+  assert.equal(ok(env.call('sync', { ops: [{ opId: 'y', table: 'visits', id: 'old', data: { total: 3000 } }] })), true);
   // 表を外すと、その表はバイトが書けない
   env.call('saveSettings', { mgrToken, settings: { staffEdit: { tables: ['visits'] } } });
-  assert.equal(env.call('sync', { ops: [{ opId: 'z', table: 'purchases', id: 'p1', data: { date: '2026-11-01', amount: 500 } }] }).results[0].code, 'forbidden');
-  // 勤怠は初期ではバイトが書けない
+  assert.equal(env.call('sync', { ops: [{ opId: 'z', table: 'cashMoves', id: 'm1', data: { bizDate: '2026-11-01', type: '入金', amount: 500 } }] }).results[0].code, 'forbidden');
+  // 仕入れ・勤怠は、範囲に関係なくバイトは書けない
+  assert.equal(env.call('sync', { ops: [{ opId: 'p', table: 'purchases', id: 'p1', data: { date: '2026-11-01', amount: 500 } }] }).results[0].code, 'forbidden');
   assert.equal(env.call('sync', { ops: [{ opId: 'w', table: 'attendance', id: 'a1', data: { bizDate: '2026-11-01', hours: 3 } }] }).results[0].code, 'forbidden');
 });
 
@@ -220,4 +220,32 @@ test('タブに保護がかかり、直接書き換えられるのは林だけ',
     assert.deepEqual([...p.editors], ['hayashi@example.com'], name);
     assert.equal(p.canDomainEdit(), false);
   }
+});
+
+test('レジからの出金は仕入れにも「レジから」で1件入る。消すと仕入れも削除。入金は仕入れに入らない', () => {
+  const env = boot();
+  const mgrToken = env.login();
+  const out = (extra = {}) => ({ opId: 'o' + Math.random(), table: 'cashMoves', id: 'm1', data: {
+    bizDate: '2026-11-01', at: '2026-11-01T19:30:00+09:00', type: '出金', amount: 3200, category: 'その他', note: '花',
+    purchaseId: 'cm-m1', status: '有効', updatedAt: '2026-11-01T19:30:00+09:00', ...extra } });
+  // バイトの出金でも写る（2回送っても1件）
+  assert.equal(env.call('sync', { ops: [out()] }).results[0].ok, true);
+  env.call('sync', { ops: [out()] });
+  let rows = env.call('fetch', { table: 'purchases', mgrToken }).rows;
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].id, rows[0].category, rows[0].note, rows[0].label, rows[0].amount, rows[0].paidFrom, rows[0].moveId, rows[0].status],
+    ['cm-m1', 'その他', '花', 'その他（花）', 3200, 'レジから', 'm1', '有効']);
+  // 金額を直すと仕入れも直る
+  env.call('sync', { ops: [out({ amount: 3000, category: '飲食物', note: '', updatedAt: '2026-11-01T19:40:00+09:00' })] });
+  rows = env.call('fetch', { table: 'purchases', mgrToken }).rows;
+  assert.deepEqual([rows[0].amount, rows[0].label, rows[0].note], [3000, '飲食物', '']);
+  // 出金を消すと仕入れも削除
+  env.call('sync', { ops: [{ opId: 'd', table: 'cashMoves', id: 'm1', data: { status: '削除', updatedAt: '2026-11-01T20:00:00+09:00' } }] });
+  rows = env.call('fetch', { table: 'purchases', mgrToken }).rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, '削除');
+  // 入金は仕入れに入らない
+  env.call('sync', { ops: [{ opId: 'i', table: 'cashMoves', id: 'm2', data: { bizDate: '2026-11-01', type: '入金', amount: 10000, reason: 'オーナーの補充' } }] });
+  assert.equal(env.call('fetch', { table: 'purchases', mgrToken }).rows.length, 1);
+  assert.equal(env.ss.getSheetByName('レジの出し入れ').dump().length, 2);
 });

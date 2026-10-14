@@ -1,83 +1,184 @@
-// 来客・会計の計算（画面から切り離して、テストできるようにしておく）
-import { minutesLeft } from './bizday.js';
+// 来客・会計・レジの計算（画面から切り離して、テストできるようにしておく）
+//
+// 数え方
+// - 組の合計 = 基本の金額（入店のときに決まる）＋ 追加の合計
+// - 受け取りは何回でも（割り勘・併用）。合計に達したら退店
+// - 売上・来客数に数えるのは「退店」した組だけ。店内の組の合計は「見込み」
+// - あるはずの現金 = 開店時のレジの現金 ＋ 今日の現金売上 ＋ 入金 − 出金
 
-export const PLAN_NOMI = '飲み放題';
-export const PLAN_SINGLE = '単品';
-export const PAYS = ['現金', 'キャッシュレス', 'ポイント'];
-export const KINDS = ['通常', '団体'];
+export const KIND_NOMI = '飲み放題';
+export const KIND_TANPIN = '単品';
+export const KIND_EVENT = 'イベント';
+export const KINDS = [KIND_NOMI, KIND_TANPIN, KIND_EVENT];
+export const METHODS = ['現金', 'キャッシュレス', 'ポイント'];
 export const ST_IN = '店内';
-export const ST_PAID = '会計済';
+export const ST_OUT = '退店';
 export const ST_DEL = '削除';
+export const MOVE_IN = '入金';
+export const MOVE_OUT = '出金';
+export const EXTRA_ADD = '追加';
+export const EXTRA_EXT = '延長';
 
 const n = v => Number(v) || 0;
+const yen = v => '¥' + Math.round(n(v)).toLocaleString('ja-JP');
+const isInt = v => Number.isInteger(Number(v)) && v !== '' && v != null;
 
-/** 名前が空のときに出す当日の通し番号（削除した組も数えて、番号を使い回さない） */
+// ===== 組 =====
+
+/** 名前が空のときの当日の通し番号（削除した組も数えて、番号を使い回さない） */
 export function nextNo(allVisitsOfDay) {
   return allVisitsOfDay.reduce((m, v) => Math.max(m, n(v.no)), 0) + 1;
 }
 
 export function label(v) {
-  return v.name ? v.name : `${v.no}番`;
+  return v.name ? v.name : `${v.no}組目`;
 }
 
-/** 飲み放題の時間（延長を足した合計・分） */
-export function totalMinutes(v, s) {
-  return n(s.nomiMinutes) + (v.extensions || []).reduce((a, e) => a + n(e.minutes), 0);
+/** 入店のときの基本の金額。飲み放題＝人数×料金、イベント＝団体の合計、単品＝0円 */
+export function baseAmount(kind, people, s, eventAmount = 0) {
+  if (kind === KIND_NOMI) return n(people) * n(s.nomiPrice);
+  if (kind === KIND_EVENT) return n(eventAmount);
+  return 0;
+}
+
+export const extrasTotal = v => (v.extras || []).reduce((a, x) => a + n(x.amount), 0);
+export const total = v => n(v.base) + extrasTotal(v);
+export const paidTotal = v => (v.pays || []).reduce((a, p) => a + n(p.amount), 0);
+export const remaining = v => Math.max(0, total(v) - paidTotal(v));
+export const overpaid = v => Math.max(0, paidTotal(v) - total(v));
+
+/** 受け取りを支払い方法ごとに足す（スプシの列 現金・キャッシュレス・ポイント） */
+export function methodSums(pays) {
+  const sum = m => (pays || []).filter(p => p.method === m).reduce((a, p) => a + n(p.amount), 0);
+  return { cash: sum('現金'), cashless: sum('キャッシュレス'), point: sum('ポイント') };
 }
 
 /**
- * 時間の状態
- * - single：単品（経過時間だけ）
- * - ok：まだ余裕がある / lo：ラストオーダー / over：時間超過
+ * 受け取る。input が空なら残りの全額。
+ * - 現金で残りより多ければ、残りだけ受け取ってお釣りを出す
+ * - キャッシュレス・ポイントで残りより多い金額は受け付けない
+ * - 残りが0円なら、受け取らずに退店（0円の組）
+ * @returns {{ok: boolean, error?: string, pay?: {method: string, amount: number}|null, change?: number, finished?: boolean}}
+ */
+export function receive(v, method, input) {
+  if (overpaid(v) > 0) return { ok: false, error: `受け取り済みが合計より ${yen(overpaid(v))} 多くなっています。受け取りを消して直してください。` };
+  const rem = remaining(v);
+  if (rem === 0) return { ok: true, pay: null, change: 0, finished: true };
+  const raw = input === '' || input == null ? rem : Number(input);
+  if (!isInt(raw) || raw <= 0) return { ok: false, error: '金額を入れてください。' };
+  if (raw > rem && method !== '現金') return { ok: false, error: `残り（${yen(rem)}）より多い金額です。` };
+  const amount = Math.min(raw, rem);
+  return { ok: true, pay: { method, amount }, change: raw - amount, finished: amount >= rem };
+}
+
+/** 精算済みの組の支払いの表示：「キャッシュレス ¥7,000 ＋ 現金 ¥3,500」 */
+export function payLabel(v) {
+  const pays = v.pays || [];
+  return pays.length ? pays.map(p => `${p.method} ${yen(p.amount)}`).join(' ＋ ') : '0円';
+}
+
+/** 飲み放題の時間（延長を足した合計・分） */
+export function nomiMinutes(v, s) {
+  return n(s.nomiMinutes) + (v.extras || []).filter(x => x.type === EXTRA_EXT).reduce((a, x) => a + n(x.minutes), 0);
+}
+
+/**
+ * 時間の状態。kind: ok=余裕 / lo=ラストオーダー（イベントは終了まぎわ）/ over=超過 / single=単品
+ * - 飲み放題：入店から（時間＋延長）まで
+ * - イベント：終了の予定時刻まで
+ * - 単品：経過時間だけ
  */
 export function timeState(v, s, now = new Date()) {
-  if (v.plan !== PLAN_NOMI) return { kind: 'single', elapsed: Math.max(0, Math.floor((now.getTime() - Date.parse(v.inAt)) / 60e3)) };
-  const left = minutesLeft(v.inAt, totalMinutes(v, s), now);
-  const kind = left < 0 ? 'over' : left <= n(s.lastOrderMinutes) ? 'lo' : 'ok';
-  return { kind, left };
+  const t = now.getTime();
+  if (v.kind === KIND_TANPIN || (v.kind === KIND_EVENT && !v.endAt)) {
+    return { kind: 'single', elapsed: Math.max(0, Math.floor((t - Date.parse(v.inAt)) / 60e3)) };
+  }
+  const end = v.kind === KIND_EVENT ? Date.parse(v.endAt) : Date.parse(v.inAt) + nomiMinutes(v, s) * 60e3;
+  const left = Math.floor((end - t) / 60e3);
+  return { kind: left < 0 ? 'over' : left <= n(s.lastOrderMinutes) ? 'lo' : 'ok', left };
 }
 
-/** 分 → 1:05 */
-export function fmtMin(m) {
-  const a = Math.abs(Math.trunc(m));
-  return `${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`;
+/** カードの大きな文字（雛形どおり） */
+export function timeText(v, st) {
+  if (st.kind === 'single') return `経過 ${st.elapsed}分`;
+  if (st.kind === 'over') return `${-st.left}分超過`;
+  return v.kind === KIND_EVENT ? `終了まで${st.left}分` : `あと${st.left}分`;
 }
 
-/** 会計の金額の初期値。飲み放題は 人数×(料金＋延長の料金)。単品はなし（毎回手入力） */
-export function defaultAmount(v, s) {
-  if (v.plan !== PLAN_NOMI) return null;
-  const ext = (v.extensions || []).reduce((a, e) => a + n(e.price), 0);
-  return n(v.people) * (n(s.nomiPrice) + ext);
+// ===== その日の合計 =====
+
+/** 売上に数える金額。ポイントを売上に含めない設定なら、ポイントで受け取った分を引く */
+export function countedAmount(v, s) {
+  return total(v) - (s.pointCountsAsSales === false ? methodSums(v.pays).point : 0);
 }
 
-/** 会計できる金額か（0円・未入力・小数はだめ） */
-export function validAmount(x) {
-  return x !== '' && x != null && Number.isInteger(Number(x)) && Number(x) > 0;
-}
-
-/** その日の合計（会計済みだけ）。ポイントを売上に含めない設定なら、売上と通常・団体から外す */
 export function daySummary(visits, s) {
-  const paid = visits.filter(v => v.status === ST_PAID);
+  const done = visits.filter(v => v.status === ST_OUT);
   const inStore = visits.filter(v => v.status === ST_IN);
-  const counted = v => s.pointCountsAsSales !== false || v.pay !== 'ポイント';
-  const sum = f => paid.filter(f).reduce((a, v) => a + n(v.amount), 0);
+  const sum = (arr, f) => arr.reduce((a, v) => a + f(v), 0);
+  const sales = sum(done, v => countedAmount(v, s));
+  const guests = sum(done, v => n(v.people));
+  const byKind = k => sum(done.filter(v => v.kind === k), v => countedAmount(v, s));
+  const ms = done.reduce((a, v) => { const m = methodSums(v.pays); a.cash += m.cash; a.cashless += m.cashless; a.point += m.point; return a; }, { cash: 0, cashless: 0, point: 0 });
   return {
-    sales: sum(counted),
-    cash: sum(v => v.pay === '現金'),
-    cashless: sum(v => v.pay === 'キャッシュレス'),
-    point: sum(v => v.pay === 'ポイント'),
-    normal: sum(v => counted(v) && v.kind !== '団体'),
-    group: sum(v => counted(v) && v.kind === '団体'),
-    guests: paid.reduce((a, v) => a + n(v.people), 0),
-    groups: paid.length,
-    inStore: inStore.length,
-    inStorePeople: inStore.reduce((a, v) => a + n(v.people), 0)
+    sales, guests, groups: done.length, avg: guests ? Math.round(sales / guests) : 0,
+    ...ms,
+    nomi: byKind(KIND_NOMI), tanpin: byKind(KIND_TANPIN), event: byKind(KIND_EVENT),
+    inStore: inStore.length, inStorePeople: sum(inStore, v => n(v.people)), expected: sum(inStore, total)
   };
 }
 
-/** レジの差額 = レジの現金 − 釣り銭の準備金 − 現金の売上（プラスは多い、マイナスは足りない） */
-export function cashDiff(drawerCash, changeFloat, cashSales) {
-  return n(drawerCash) - n(changeFloat) - n(cashSales);
+/** 割合（0〜100の整数） */
+export const pct = (part, whole) => (whole ? Math.round(part / whole * 100) : 0);
+
+// ===== レジ =====
+
+const signed = m => (m.type === MOVE_IN ? 1 : -1) * n(m.amount);
+const active = moves => (moves || []).filter(m => m.status !== ST_DEL);
+
+/** 出し入れの表示：「出金・その他（花）」「入金・オーナーの補充」 */
+export function moveLabel(m) {
+  return m.type === MOVE_OUT ? `出金・${purchaseLabel(m.category, m.note)}` : `入金・${m.reason || ''}`;
+}
+
+export function purchaseLabel(category, note) {
+  return category === 'その他' ? `その他（${note || ''}）` : String(category || '');
+}
+
+/** 出し入れの入力の確認。問題がなければ空文字 */
+export function validateMove({ type, amount, category, note }) {
+  if (!isInt(amount) || Number(amount) <= 0) return '金額を入れてください。';
+  if (type === MOVE_OUT && !category) return '科目を選んでください。';
+  if (type === MOVE_OUT && category === 'その他' && !String(note || '').trim()) return 'その他の内容を入れてください。';
+  return '';
+}
+
+/**
+ * その日のレジ
+ * - 開店時の現金：その日に手で入れた値があればそれ。なければ前の締めの「数えた現金」に、
+ *   その締めのあとの出し入れ（閉店後や休みの日の補充など）を足したもの。前の締めがなければ「まだない」
+ * - 入金・出金：その日の出し入れ。閉店したあとに入れた分は次の営業日に回す（until を渡したとき）
+ * @param {{day: string, closings: object[], moves: object[], dayRow?: object, cashSales: number, until?: string}} p
+ */
+export function registerCalc({ day, closings, moves, dayRow, cashSales, until }) {
+  const act = active(moves);
+  let openCash = null, openFrom = 'none';
+  if (dayRow && dayRow.openCash !== '' && dayRow.openCash != null) {
+    openCash = n(dayRow.openCash);
+    openFrom = 'manual';
+  } else {
+    const prev = (closings || []).filter(c => c.bizDate < day && c.countedCash !== '' && c.countedCash != null)
+      .sort((a, b) => b.bizDate.localeCompare(a.bizDate))[0];
+    if (prev) {
+      const after = act.filter(m => (m.bizDate > prev.bizDate && m.bizDate < day) || (m.bizDate === prev.bizDate && String(m.at) > String(prev.closedAt)));
+      openCash = n(prev.countedCash) + after.reduce((a, m) => a + signed(m), 0);
+      openFrom = 'carry';
+    }
+  }
+  const today = act.filter(m => m.bizDate === day && (!until || String(m.at) <= String(until)));
+  const cashIn = today.filter(m => m.type === MOVE_IN).reduce((a, m) => a + n(m.amount), 0);
+  const cashOut = today.filter(m => m.type === MOVE_OUT).reduce((a, m) => a + n(m.amount), 0);
+  return { openCash, openFrom, cashIn, cashOut, expected: n(openCash) + n(cashSales) + cashIn - cashOut };
 }
 
 /** 締めたあとに会計が変わったか */

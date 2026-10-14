@@ -5,7 +5,7 @@
 // kv:     設定・トークンなど
 
 export const DATE_KEYS = {
-  visits: 'bizDate', closings: 'bizDate', days: 'bizDate', attendance: 'bizDate',
+  visits: 'bizDate', closings: 'bizDate', days: 'bizDate', attendance: 'bizDate', cashMoves: 'bizDate',
   purchases: 'date', fixedCosts: 'month', events: 'date', requests: 'date', log: 'at', staff: null
 };
 

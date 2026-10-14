@@ -6,12 +6,12 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.1.0';
+var APP_VERSION = '0.2.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
 // 型: t=文字 n=数値 b=はい/いいえ j=JSON（文字で保存）
-// read: open=いつでも / attendance・fixedCosts・monthly=設定の「見せる範囲」に従う / mgr=店長だけ
+// read: open=いつでも / mgr=店長だけ / eventContact=設定の「見せる範囲」に従う
 // write: staff=設定の「バイトが直せる範囲」（表と日数）に従う。店長はいつでも / mgr=店長だけ / open=だれでも（操作履歴の追記）
 // hidden: 項目ごとの見せる範囲（権限がないと読めず、書いても無視して元の値を残す）
 // dateKey: 期間で絞り込むときに使う項目
@@ -23,23 +23,39 @@ var COMMON_TAIL = [
 ];
 
 var TABLES = {
+  // 1組1行。売上に数えるのは状態が「退店」（精算が終わって退店）の組だけ
+  // 合計 = 基本の金額 + 追加の合計。受け取りは何回でも（割り勘・併用）
   visits: {
     sheet: '来客', read: 'open', write: 'staff', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['no', '番号', 'n'], ['name', '名前', 't'],
-      ['people', '人数', 'n'], ['plan', 'プラン', 't'], ['inAt', '入店時刻', 't'],
-      ['extensions', '延長', 'j'], ['status', '状態', 't'], ['paidAt', '会計時刻', 't'],
-      ['amount', '金額', 'n'], ['pay', '支払方法', 't'], ['kind', '区分', 't'],
+      ['people', '人数', 'n'], ['kind', '種類', 't'], ['inAt', '入店時刻', 't'], ['endAt', '終了予定', 't'],
+      ['status', '状態', 't'], ['outAt', '退店時刻', 't'],
+      ['base', '基本の金額', 'n'], ['extras', '追加', 'j'], ['total', '合計', 'n'],
+      ['pays', '受け取り', 'j'], ['cash', '現金', 'n'], ['cashless', 'キャッシュレス', 'n'], ['point', 'ポイント', 'n'],
       ['eventId', '予定ID', 't'], ['trial', '試運転', 'b']
     ].concat(COMMON_TAIL)
   },
+  // 1日1行（ID＝営業日）。あるはずの現金 = 開店時の現金 + 現金売上 + 入金 − 出金
   closings: {
     sheet: '締め', read: 'open', write: 'staff', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['closedAt', '閉店時刻', 't'],
-      ['sales', '売上', 'n'], ['cash', '現金', 'n'], ['cashless', 'キャッシュレス', 'n'], ['point', 'ポイント', 'n'],
-      ['normal', '通常', 'n'], ['group', '団体', 'n'], ['guests', '来客数', 'n'], ['groups', '組数', 'n'],
-      ['drawerCash', 'レジ現金', 'n'], ['diff', '差額', 'n'], ['trial', '試運転', 'b']
+      ['sales', '売上', 'n'], ['guests', '来客数', 'n'], ['groups', '組数', 'n'],
+      ['cash', '現金', 'n'], ['cashless', 'キャッシュレス', 'n'], ['point', 'ポイント', 'n'],
+      ['nomi', '飲み放題', 'n'], ['tanpin', '単品', 'n'], ['event', 'イベント', 'n'],
+      ['openCash', '開店時の現金', 'n'], ['cashIn', '入金', 'n'], ['cashOut', '出金', 'n'],
+      ['expectedCash', 'あるはずの現金', 'n'], ['countedCash', '数えた現金', 'n'], ['diff', '差額', 'n'],
+      ['trial', '試運転', 'b']
+    ].concat(COMMON_TAIL)
+  },
+  // レジの出し入れ。出金はGASが仕入れにも「レジから」として自動で記録する（消すと仕入れも消す）
+  cashMoves: {
+    sheet: 'レジの出し入れ', read: 'open', write: 'staff', dateKey: 'bizDate',
+    cols: [
+      ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['at', '日時', 't'], ['type', '入金・出金', 't'],
+      ['amount', '金額', 'n'], ['category', '科目', 't'], ['note', '内容', 't'], ['reason', '入金の理由', 't'],
+      ['purchaseId', '仕入れID', 't'], ['status', '状態', 't']
     ].concat(COMMON_TAIL)
   },
   days: {
@@ -47,33 +63,36 @@ var TABLES = {
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['closed', '店休日', 'b'],
       ['shiftPlan', 'シフト予定', 't'], ['lastPlan', 'ラスト予定', 't'],
-      ['shiftActual', 'シフト実績', 't'], ['lastActual', 'ラスト実績', 't']
+      ['shiftActual', 'シフト実績', 't'], ['lastActual', 'ラスト実績', 't'],
+      ['openCash', '開店時の現金（手入力）', 'n']
     ].concat(COMMON_TAIL)
   },
   staff: {
-    sheet: 'スタッフ', read: 'open', write: 'mgr', hidden: { wage: 'attendance' },
+    sheet: 'スタッフ', read: 'open', write: 'mgr', hidden: { wage: 'mgr', transport: 'mgr' },
     cols: [
-      ['id', 'ID', 't'], ['name', '名前', 't'], ['wage', '時給', 'n'],
+      ['id', 'ID', 't'], ['name', '名前', 't'], ['wage', '時給', 'n'], ['transport', '交通費', 'n'],
       ['active', '在籍', 'b'], ['order', '表示順', 'n']
     ].concat(COMMON_TAIL)
   },
   attendance: {
-    sheet: '勤怠', read: 'attendance', write: 'staff', dateKey: 'bizDate',
+    sheet: '勤怠', read: 'mgr', write: 'mgr', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['staffId', 'スタッフID', 't'], ['name', '名前', 't'],
       ['hours', '勤務時間', 'n'], ['wage', '時給', 'n'], ['cost', '人件費', 'n'], ['status', '状態', 't']
     ].concat(COMMON_TAIL)
   },
+  // 科目は 飲食物／備品／その他。その他は内容が必須で、表示は「その他（花）」
   purchases: {
-    sheet: '仕入れ', read: 'open', write: 'staff', dateKey: 'date',
+    sheet: '仕入れ', read: 'mgr', write: 'mgr', dateKey: 'date',
     cols: [
-      ['id', 'ID', 't'], ['date', '日付', 't'], ['shop', '店名', 't'], ['category', '項目', 't'],
-      ['item', '品目', 't'], ['amount', '金額', 'n'], ['receipts', 'レシート', 'j'],
-      ['source', '入力方法', 't'], ['status', '状態', 't']
+      ['id', 'ID', 't'], ['date', '日付', 't'], ['category', '科目', 't'], ['note', '内容', 't'],
+      ['label', '科目（表示）', 't'], ['shop', '店名', 't'], ['amount', '金額', 'n'],
+      ['paidFrom', '支払い元', 't'], ['moveId', '出し入れID', 't'],
+      ['receipts', 'レシート', 'j'], ['source', '入力方法', 't'], ['status', '状態', 't']
     ].concat(COMMON_TAIL)
   },
   fixedCosts: {
-    sheet: '固定費', read: 'fixedCosts', write: 'staff', dateKey: 'month',
+    sheet: '固定費', read: 'mgr', write: 'mgr', dateKey: 'month',
     cols: [
       ['id', 'ID', 't'], ['month', '月', 't'], ['item', '項目', 't'], ['amount', '金額', 'n'], ['status', '状態', 't']
     ].concat(COMMON_TAIL)
@@ -84,7 +103,8 @@ var TABLES = {
     cols: [
       ['id', 'ID', 't'], ['date', '日付', 't'], ['type', '種類', 't'], ['title', '内容', 't'],
       ['people', '人数', 'n'], ['contactName', '幹事', 't'], ['contactInfo', '幹事の連絡先', 't'],
-      ['expectedAmount', '見込みの金額', 'n'], ['status', '状態', 't']
+      ['expectedAmount', '見込みの金額', 'n'], ['startTime', '開始', 't'], ['endTime', '終了', 't'],
+      ['status', '状態', 't']
     ].concat(COMMON_TAIL)
   },
   requests: {
@@ -111,6 +131,7 @@ var DEFAULT_SETTINGS = {
   nomiMinutes: 120,
   lastOrderMinutes: 30,
   extensions: [],
+  quickAdds: [500, 800, 1000],
   bizDayCutoffHour: 12,
   openTime: '18:00',
   closeTime: '25:00',
@@ -119,37 +140,38 @@ var DEFAULT_SETTINGS = {
   defaultWage: 2000,
   cancelReasons: ['打ち間違い', '会計のやり直し', '金額の修正', 'その他'],
   deleteReasons: ['打ち間違い', '二重に登録', '来店取りやめ', 'その他'],
-  purchaseCategories: ['酒', '食材', '消耗品', '備品', 'その他'],
+  purchaseCategories: ['飲食物', '備品', 'その他'],
   purchaseRules: [],
+  cashInReasons: ['オーナーの補充', 'その他'],
   fixedCostItems: ['家賃', 'ガス', '電気', 'カラオケ'],
   eventTypes: ['団体', '日本酒の会', '貸切'],
-  visibility: { attendance: true, fixedCosts: true, monthly: true, eventContact: true },
+  visibility: { eventContact: true },
   // days=0 はその営業日だけ。1なら前日まで。未来の日付（予定・希望休）はいつでも
-  staffEdit: { days: 0, tables: ['visits', 'closings', 'days', 'purchases', 'events', 'requests'] },
-  changeFloat: 0,
+  staffEdit: { days: 0, tables: ['visits', 'closings', 'days', 'cashMoves', 'events', 'requests'] },
   targets: { monthlySales: 1000000, dailyGuests: 10, monthlyEvents: 0 }
 };
 
 var SETTING_LABELS = {
   nomiPrice: '飲み放題の料金（1人・円）',
   nomiMinutes: '飲み放題の時間（分）',
-  lastOrderMinutes: 'ラストオーダー（残り何分で知らせるか）',
-  extensions: '延長の種類（名前・料金・時間）',
+  lastOrderMinutes: 'ラストオーダー（残り何分で知らせるか。イベントは終了の何分前か）',
+  extensions: '延長の種類（名前・1人の料金・時間）',
+  quickAdds: '追加のボタンの金額',
   bizDayCutoffHour: '営業日の切り替え時刻（この時より前は前日の営業日）',
   openTime: '開店時刻',
   closeTime: '閉店時刻',
   goLiveDate: '運用開始日（これより前の記録は試運転）',
   pointCountsAsSales: 'ポイントを売上に含める',
   defaultWage: '時給の初期値（円）',
-  cancelReasons: '会計を取り消す理由',
+  cancelReasons: '店内に戻す理由',
   deleteReasons: '入店を削除する理由',
-  purchaseCategories: '仕入れの項目',
-  purchaseRules: '仕入れの項目を決めるルール（店名の言葉 → 項目）',
+  purchaseCategories: '仕入れの科目',
+  purchaseRules: '仕入れの科目を決めるルール（店名の言葉 → 科目）',
+  cashInReasons: 'レジに入れる理由',
   fixedCostItems: '固定費の項目',
   eventTypes: '予定の種類',
   visibility: 'バイトに見せる範囲',
   staffEdit: 'バイトが直せる範囲（何日前まで・どの記録）',
-  changeFloat: '釣り銭の準備金（レジに最初から入れておく現金・円）',
   targets: '目標'
 };
 
@@ -339,9 +361,45 @@ function applyOps_(ops, ctx) {
     (byTable[op.table] = byTable[op.table] || []).push(op);
   });
   Object.keys(byTable).forEach(function (key) {
-    results = results.concat(upsert_(key, byTable[key], ctx));
+    var r = upsert_(key, byTable[key], ctx);
+    results = results.concat(r);
+    if (key === 'cashMoves') {
+      var okIds = byTable[key].filter(function (op, i) { return r[i] && r[i].ok; }).map(function (op) { return String(op.id); });
+      syncPurchasesFromMoves_(okIds, ctx);
+    }
   });
   return results;
+}
+
+/**
+ * レジからの出金を仕入れにも写す（仕入れのID＝'cm-'＋出し入れのID。何度写しても1件）。
+ * 出金を消したら（または入金に変えたら）仕入れも「削除」にする。バイトの出金でも写せるように、ここは店長の権限で書く
+ */
+function syncPurchasesFromMoves_(ids, ctx) {
+  if (!ids.length) return;
+  var moves = readTable_(TABLES.cashMoves).rows.filter(function (m) { return ids.indexOf(m.id) >= 0; });
+  var existing = {};
+  readTable_(TABLES.purchases).rows.forEach(function (p) { existing[p.id] = true; });
+  var ops = [];
+  moves.forEach(function (m) {
+    var pid = 'cm-' + m.id;
+    var isOut = m.type === '出金' && m.status !== '削除';
+    if (!isOut && !existing[pid]) return;
+    ops.push({
+      opId: 'sys-' + pid, id: pid, data: {
+        date: m.bizDate, category: m.category, note: m.category === 'その他' ? m.note : '',
+        label: purchaseLabel_(m.category, m.note), shop: '', amount: m.amount,
+        paidFrom: 'レジから', moveId: m.id, source: 'レジの出し入れ', status: isOut ? '有効' : '削除',
+        createdAt: m.createdAt, updatedAt: m.updatedAt, deviceId: m.deviceId
+      }
+    });
+  });
+  if (ops.length) upsert_('purchases', ops, { mgr: true, settings: ctx.settings, deviceId: ctx.deviceId });
+}
+
+/** 科目の表示。その他は「その他（花）」 */
+function purchaseLabel_(category, note) {
+  return category === 'その他' ? 'その他（' + (note || '') + '）' : String(category || '');
 }
 
 function upsert_(tableKey, ops, ctx) {

@@ -1,30 +1,32 @@
 // アプリの外枠：起動・初回のつなぎ込み・ナビ・送信状態・画面の切り替え
 import { GAS_URL, APP_VERSION } from '../config.js';
 import { $, h, toast, uuid } from './util.js';
-import { bizDateOf, fmtDay, isTrial, addDays } from './bizday.js';
+import { bizDateOf, fmtDay, isTrial, addDays, nowIso } from './bizday.js';
 import { idbStore } from './store.js';
 import { createApi, ApiError, NetworkError } from './api.js';
 import { createSync } from './sync.js';
 import { createAuth } from './auth.js';
-import { renderSettings } from './screens/settings.js';
 import { renderPlaceholder } from './screens/placeholder.js';
-import { renderVisits } from './screens/visits.js';
+import { renderPinGate } from './screens/pin.js';
+import { renderMore } from './screens/more.js';
+import { renderStore } from './screens/store.js';
+import { renderToday } from './screens/today.js';
 
 const later = (title, when) => (root) => renderPlaceholder(root, title, when);
 
-// access: open=いつでも / 設定の見せる範囲のキー / settings=暗証番号
+// メニュー（雛形どおりの順）。lock=暗証番号（店長だけ）
 const SCREENS = [
-  { id: 'visits', label: '来客・会計', access: 'open', render: renderVisits },
-  { id: 'events', label: '予定', access: 'open', render: later('予定', '11月の第1週に足します。') },
-  { id: 'purchases', label: '仕入れ', access: 'open', render: later('仕入れ', '11月の第2週に足します。') },
-  { id: 'attendance', label: '勤怠', access: 'attendance', render: later('勤怠', '11月の第2週に足します。') },
-  { id: 'fixedCosts', label: '固定費', access: 'fixedCosts', render: later('固定費', '11月の第2週に足します。') },
-  { id: 'monthly', label: '月次', access: 'monthly', render: later('月次', '11月の第3週に足します。') },
-  { id: 'settings', label: '設定', access: 'settings', render: renderSettings }
+  { id: 'today', label: '今日', render: renderToday },
+  { id: 'store', label: '店内', render: renderStore },
+  { id: 'plan', label: '予定', render: later('予定', '11月の第1週に作ります。店内の入店で、今日の予定から選べるようになります。') },
+  { id: 'ana', label: '分析', lock: true, render: later('分析', '11月の月次と一緒に作ります。') },
+  { id: 'more', label: 'その他', lock: true, render: renderMore }
 ];
 
+const LOCK_ICON = '<svg aria-label="鍵つき" role="img" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>';
+
 export const TABLE_LABELS = {
-  visits: '来客', closings: '締め', days: '営業日', staff: 'スタッフ', attendance: '勤怠',
+  visits: '来客', closings: '締め', cashMoves: 'レジの出し入れ', days: '営業日', staff: 'スタッフ', attendance: '勤怠',
   purchases: '仕入れ', fixedCosts: '固定費', events: '予定', requests: '希望休', log: '操作履歴'
 };
 
@@ -38,7 +40,10 @@ Object.assign(app, { post, sync });
 
 app.bizDate = () => bizDateOf(new Date(), app.settings?.bizDayCutoffHour ?? 12);
 app.isTrial = (d = app.bizDate()) => isTrial(d, app.settings?.goLiveDate);
-app.canSee = access => access === 'open' || access === 'settings' || auth.isMgr() || app.settings?.visibility?.[access] !== false;
+/** 項目ごとの見せる範囲（今は予定の幹事の連絡先だけ） */
+app.canSee = key => auth.isMgr() || app.settings?.visibility?.[key] !== false;
+app.setTitle = t => { const el = $('#top-title'); if (el) el.textContent = t; };
+app.go = hash => { location.hash = hash; };
 /** 直してよいか（GASの staffCanWrite_ と同じ判定。守りはGAS、こちらはボタンを出すかどうか） */
 app.canEdit = (table, date) => {
   if (auth.isMgr()) return true;
@@ -83,15 +88,17 @@ function boot() {
   window.addEventListener('hashchange', route);
   auth.onChange(() => { renderChrome(); route(); });
   sync.onStatus(renderSyncStatus);
-  setInterval(renderTopDay, 60e3);
+  setInterval(renderTopDay, 15e3);
 
   $('#app').replaceChildren(
     h('header', { class: 'topbar' },
+      h('div', { class: 'top-title', id: 'top-title' }),
       h('div', { class: 'topbar-day', id: 'top-day' }),
       h('div', { class: 'topbar-right' },
         h('button', { class: 'sync-pill', id: 'sync-pill', onclick: openDevicePanel }),
-        h('span', { id: 'mgr-slot' }))),
-    h('nav', { class: 'nav', id: 'nav' }),
+        h('span', { class: 'top-lock', id: 'top-lock' }),
+        h('div', { class: 'clock', id: 'clock' }))),
+    h('nav', { class: 'nav', id: 'nav', 'aria-label': 'メニュー' }),
     h('main', { class: 'main', id: 'main' })
   );
   renderChrome();
@@ -106,11 +113,19 @@ function boot() {
 function renderChrome() {
   if (!$('#nav')) return;
   renderTopDay();
-  $('#nav').replaceChildren(...SCREENS.filter(s => app.canSee(s.access)).map(s =>
-    h('button', { class: 'nav-btn' + (current === s.id ? ' active' : ''), onclick: () => { location.hash = s.id; } }, s.label)));
-  $('#mgr-slot').replaceChildren(auth.isMgr()
-    ? h('button', { class: 'mgr-pill', onclick: () => { auth.lock(); toast('ロックしました'); } }, '店長モード・ロックする')
-    : '');
+  const mgr = auth.isMgr();
+  const lockBtn = () => h('button', { class: 'btn btn-sm lock-btn', onclick: () => { auth.lock(); toast('ロックしました'); } }, '店長ロック');
+  $('#nav').replaceChildren(
+    h('div', { class: 'brand' }, 'お香芽'),
+    ...SCREENS.map(s => {
+      const btn = h('button', { class: 'nav-btn' + (current === s.id ? ' active' : ''), 'data-id': s.id, onclick: () => app.go(s.id) },
+        h('span', {}, s.label));
+      if (s.lock && !mgr) btn.insertAdjacentHTML('beforeend', LOCK_ICON);
+      return btn;
+    }),
+    h('div', { class: 'nav-space' }),
+    mgr ? lockBtn() : '');
+  $('#top-lock').replaceChildren(mgr ? lockBtn() : '');
   renderSyncStatus(sync.state);
 }
 
@@ -118,7 +133,9 @@ function renderTopDay() {
   const el = $('#top-day');
   if (!el) return;
   const d = app.bizDate();
-  el.replaceChildren(h('span', {}, fmtDay(d) + 'の営業'), app.isTrial(d) ? h('span', { class: 'badge' }, '試運転') : '');
+  el.replaceChildren(h('span', {}, '営業日 ' + fmtDay(d).replace('(', '（').replace(')', '）')),
+    app.isTrial(d) ? h('span', { class: 'badge' }, '試運転') : '');
+  $('#clock').textContent = nowIso().slice(11, 16);
 }
 
 function renderSyncStatus(st) {
@@ -130,19 +147,23 @@ function renderSyncStatus(st) {
   else if (st.pending) { text = (st.sending ? '送信中… ' : '送信待ち ') + st.pending + '件'; kind = 'warn'; }
   else if (st.lastError) { text = 'エラー'; kind = 'err'; }
   pill.className = 'sync-pill ' + kind;
-  pill.textContent = text;
+  pill.replaceChildren(h('span', { class: 'dot', 'aria-hidden': 'true' }), text);
 }
 
+/** #id または #id/sub（例：#more/settings）。最初の画面は「今日」 */
 function route() {
-  const id = location.hash.slice(1) || 'visits';
-  const screen = SCREENS.find(s => s.id === id && app.canSee(s.access)) || SCREENS[0];
+  const [id, sub] = (location.hash.slice(1) || 'today').split('/');
+  const screen = SCREENS.find(s => s.id === id) || SCREENS[0];
   if (typeof cleanup === 'function') cleanup();
+  cleanup = null;
   current = screen.id;
   const main = $('#main');
   main.replaceChildren();
   main.scrollTop = 0;
-  cleanup = screen.render(main, app);
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.textContent === screen.label));
+  app.setTitle(screen.label);
+  if (screen.lock && !auth.isMgr()) renderPinGate(main, app, '店長の暗証番号', `「${screen.label}」は店長だけが開けます。暗証番号を入れてください。`);
+  else cleanup = screen.render(main, app, sub);
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.id === screen.id));
 }
 
 // ===== この端末（送信の状態） =====

@@ -43,3 +43,20 @@ export function addDays(ymd, n) {
   const [y, m, d] = ymd.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
+
+/** ISO → 19:05（日本時間・2けた） */
+export function fmtHM(iso) {
+  return new Date(Date.parse(iso) + JST_MS).toISOString().slice(11, 16);
+}
+
+/**
+ * 時刻（HH:MM）を、その営業日の日時（ISO）にする。切り替え時刻より前の時刻は翌日の日付
+ * 例：営業日 11/1・切り替え12時 → 21:30 は 11/1 21:30、0:30 は 11/2 0:30
+ */
+export function timeOnBizDay(bizDate, hhmm, cutoffHour = 12) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const date = hour < cutoffHour ? addDays(bizDate, 1) : bizDate;
+  return `${date}T${String(hour).padStart(2, '0')}:${m[2]}:00+09:00`;
+}

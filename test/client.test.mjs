@@ -121,3 +121,13 @@ test('GASから読み込むとき、送信待ちの記録は端末のほうを�
   assert.equal((await w.store.getRow('visits', 'v1')).status, '会計済');
   assert.deepEqual((await w.store.listRows('visits', '2026-11-01', '2026-11-01')).map(r => r.id), ['v1']);
 });
+
+test('時刻を営業日の日時にする（0時を過ぎたら翌日の日付）', async () => {
+  const { fmtHM, timeOnBizDay } = await import('../v2/js/bizday.js');
+  assert.equal(fmtHM('2026-11-01T19:05:00+09:00'), '19:05');
+  assert.equal(fmtHM('2026-11-02T00:30:00+09:00'), '00:30');
+  assert.equal(timeOnBizDay('2026-11-01', '21:30'), '2026-11-01T21:30:00+09:00');
+  assert.equal(timeOnBizDay('2026-11-01', '0:30'), '2026-11-02T00:30:00+09:00');
+  assert.equal(timeOnBizDay('2026-11-30', '01:00'), '2026-12-01T01:00:00+09:00');
+  assert.equal(timeOnBizDay('2026-11-01', ''), null);
+});

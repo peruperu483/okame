@@ -31,6 +31,7 @@ export function memoryStore() {
     async failedList() { return [...failed.values()]; },
     async failedDelete(opId) { failed.delete(opId); },
     async kvGet(k) { return kv.has(k) ? kv.get(k) : null; },
+    async wipe() { rows.clear(); outbox.clear(); failed.clear(); kv.clear(); },
     async kvSet(k, v) { kv.set(k, v); }
   };
 }
@@ -81,6 +82,8 @@ export function idbStore(name = 'okame') {
     failedList: () => run('failed', 'readonly', (st, set) => req2p(st.getAll(), set)),
     failedDelete: opId => run('failed', 'readwrite', st => { st.delete(opId); }),
     kvGet: k => run('kv', 'readonly', (st, set) => req2p(st.get(k), set, v => (v ? v.v : null))),
-    kvSet: (k, v) => run('kv', 'readwrite', st => { st.put({ k, v }); })
+    kvSet: (k, v) => run('kv', 'readwrite', st => { st.put({ k, v }); }),
+    /** この端末の記録・送信待ち・共有トークンをすべて消す */
+    wipe: async () => { for (const name of ['rows', 'outbox', 'failed', 'kv']) await run(name, 'readwrite', st => { st.clear(); }); }
   };
 }

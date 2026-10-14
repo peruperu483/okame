@@ -131,3 +131,34 @@ test('時刻を営業日の日時にする（0時を過ぎたら翌日の日付�
   assert.equal(timeOnBizDay('2026-11-30', '01:00'), '2026-12-01T01:00:00+09:00');
   assert.equal(timeOnBizDay('2026-11-01', ''), null);
 });
+
+test('共有トークンを作り直すと、送信待ちは残り、新しいトークンを入れると届く。片付けで端末は空になる', async () => {
+  const env = loadGas(CODE);
+  env.setNow('2026-10-20T20:00:00+09:00');
+  env.gas.setup();
+  let token = env.props.get('SHARED_TOKEN');
+  const post = async (action, body = {}) => {
+    const r = env.post({ token, deviceId: 'tab1', ...body, action });
+    if (r.status !== 'ok') throw new ApiError(r.code, r.message);
+    return r;
+  };
+  const store = memoryStore();
+  const sync = createSync({ store, post, getDeviceId: () => 'tab1', getMgrToken: () => null });
+  env.gas.rotateToken();
+  await sync.save('visits', 'v1', { bizDate: '2026-11-01', people: 2, status: '店内' });
+  await sync.flush();
+  assert.equal(sync.state.lastErrorCode, 'unauthorized');
+  assert.equal(sync.state.pending, 1);
+  assert.equal(env.ss.getSheetByName('来客').dump().length, 0);
+  token = env.props.get('SHARED_TOKEN'); // 新しいトークンを入れ直す
+  await sync.flush();
+  sync.stop();
+  assert.equal(sync.state.lastErrorCode, '');
+  assert.equal(sync.state.pending, 0);
+  assert.equal(env.ss.getSheetByName('来客').dump().length, 1);
+  await store.kvSet('token', 'x');
+  await store.wipe();
+  assert.equal(await store.outboxCount(), 0);
+  assert.equal(await store.kvGet('token'), null);
+  assert.deepEqual(await store.listRows('visits'), []);
+});

@@ -418,3 +418,8 @@ button { cursor: pointer; }
   .dash-top, .dash-two { grid-template-columns: minmax(0, 1fr); }
   .hero-big { font-size: 44px; }
 }
+
+/* この端末の記録を消す */
+.wipe { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--line); }
+.wipe summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--text2); font-size: 14px; }
+.sheet .subform { margin-bottom: 12px; }

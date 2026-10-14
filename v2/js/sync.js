@@ -14,7 +14,7 @@ const PERMANENT = new Set(['bad_table', 'bad_op', 'forbidden']);
 export function createSync({ store, post, getDeviceId, getMgrToken }) {
   const changes = emitter();   // 記録が変わった（表の名前）
   const status = emitter();    // 送信の状態
-  let state = { pending: 0, failed: 0, online: true, sending: false, lastOkAt: null, lastError: '' };
+  let state = { pending: 0, failed: 0, online: true, sending: false, lastOkAt: null, lastError: '', lastErrorCode: '' };
   let flushing = null;
   let timer = null;
 
@@ -75,9 +75,9 @@ export function createSync({ store, post, getDeviceId, getMgrToken }) {
         touched.forEach(t => changes.emit(t));
         if (!done.length) break; // 進まないときは無限に回さない
       }
-      setState({ online: true, lastOkAt: nowIso(), lastError: '' });
+      setState({ online: true, lastOkAt: nowIso(), lastError: '', lastErrorCode: '' });
     } catch (e) {
-      setState({ online: !(e instanceof NetworkError), lastError: e.message });
+      setState({ online: !(e instanceof NetworkError), lastError: e.message, lastErrorCode: e.code || '' });
     } finally {
       await refreshCounts();
       setState({ sending: false });

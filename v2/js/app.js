@@ -142,7 +142,8 @@ function renderSyncStatus(st) {
   const pill = $('#sync-pill');
   if (!pill) return;
   let text = '送信済み', kind = 'ok';
-  if (st.failed) { text = `送れなかった ${st.failed}件`; kind = 'err'; }
+  if (st.lastErrorCode === 'unauthorized') { text = 'トークンが違います'; kind = 'err'; }
+  else if (st.failed) { text = `送れなかった ${st.failed}件`; kind = 'err'; }
   else if (!st.online) { text = st.pending ? `オフライン・送信待ち ${st.pending}件` : 'オフライン'; kind = 'warn'; }
   else if (st.pending) { text = (st.sending ? '送信中… ' : '送信待ち ') + st.pending + '件'; kind = 'warn'; }
   else if (st.lastError) { text = 'エラー'; kind = 'err'; }
@@ -171,22 +172,68 @@ async function openDevicePanel() {
   const failed = await store.failedList();
   const st = sync.state;
   const close = () => overlay.remove();
+
+  // 共有トークンが作り直されたとき：新しいトークンを入れる（送信待ちはそのまま残して送る）
+  const tokenInput = h('input', { class: 'input', type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, placeholder: '新しい共有トークン' });
+  const tokenMsg = h('p', { class: 'help' });
+  const tokenBox = h('div', { class: 'subform' },
+    h('b', {}, '共有トークンが違います'),
+    h('p', { class: 'help' }, 'スプシで共有トークンが作り直されました。スプシのメニュー「お香芽 → 共有トークンを表示」に出る文字を入れてください。送信待ちはそのまま送ります。'),
+    tokenInput,
+    h('button', {
+      class: 'btn btn-primary', onclick: async () => {
+        const tok = tokenInput.value.trim();
+        if (!tok) return;
+        const old = app.token;
+        app.token = tok;
+        tokenMsg.textContent = '確かめています…';
+        try {
+          await post('bootstrap');
+          await store.kvSet('token', tok);
+          close();
+          toast('共有トークンを入れ直しました');
+          sync.flush();
+        } catch (e) {
+          app.token = old;
+          tokenMsg.textContent = e instanceof ApiError && e.code === 'unauthorized' ? '共有トークンが違います。' : app.errorText(e);
+        }
+      }
+    }, '入れ直す'),
+    tokenMsg);
+
+  // テストに使った端末の片付け：この端末の記録・送信待ち・共有トークンを消す（スプシの記録は消えない）
+  const wipeInput = h('input', { class: 'input', type: 'text', autocomplete: 'off', placeholder: '「けす」と入れる' });
+  const wipeBtn = h('button', {
+    class: 'btn btn-danger', disabled: true, onclick: async () => {
+      await store.wipe();
+      location.reload();
+    }
+  }, 'この端末の記録を消す');
+  wipeInput.addEventListener('input', () => { wipeBtn.disabled = wipeInput.value.trim() !== 'けす'; });
+  const wipeBox = h('details', { class: 'wipe' },
+    h('summary', {}, 'この端末の記録を消す（テストに使った端末の片付け）'),
+    h('p', { class: 'help' }, `この端末に保存した記録と共有トークンを消して、最初の画面に戻します。スプシにある記録は消えません。` +
+      (st.pending || failed.length ? `送信待ち ${st.pending}件・送れなかった ${failed.length}件も消えて、スプシには届きません。` : '')),
+    h('div', { class: 'inline-add' }, wipeInput, wipeBtn));
+
   const overlay = h('div', { class: 'overlay', onclick: e => { if (e.target === overlay) close(); } },
     h('div', { class: 'sheet' },
       h('h2', {}, 'この端末の送信'),
+      st.lastErrorCode === 'unauthorized' ? tokenBox : null,
       h('dl', { class: 'kv' },
         h('dt', {}, '送信待ち'), h('dd', {}, st.pending + '件'),
         h('dt', {}, '送れなかった'), h('dd', {}, failed.length + '件'),
         h('dt', {}, '最後に送れた時刻'), h('dd', {}, st.lastOkAt ? st.lastOkAt.slice(5, 16).replace('T', ' ') : '—'),
-        st.lastError ? [h('dt', {}, '最後のエラー'), h('dd', {}, st.lastError)] : ''),
+        st.lastError ? [h('dt', {}, '最後のエラー'), h('dd', {}, st.lastError)] : null),
       failed.length ? h('div', {},
         h('p', { class: 'help' }, '次の記録はGASに断られました。店長モードでもう一度送ると通ることがあります。'),
         h('ul', { class: 'plain-list' }, failed.map(f =>
-          h('li', {}, `${TABLE_LABELS[f.table] || f.table}（${(f.at || '').slice(5, 16).replace('T', ' ')}）：${f.code}`)))) : '',
+          h('li', {}, `${TABLE_LABELS[f.table] || f.table}（${(f.at || '').slice(5, 16).replace('T', ' ')}）：${f.code}`)))) : null,
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn', onclick: close }, '閉じる'),
-        failed.length ? h('button', { class: 'btn', onclick: async () => { await sync.retryFailed(); close(); } }, 'もう一度送る') : '',
+        failed.length ? h('button', { class: 'btn', onclick: async () => { await sync.retryFailed(); close(); } }, 'もう一度送る') : null,
         h('button', { class: 'btn btn-primary', onclick: async () => { await sync.flush(); close(); toast(sync.state.pending ? 'まだ送れていません' : '送りました'); } }, '今すぐ送る')),
+      wipeBox,
       h('p', { class: 'fine' }, `版 ${APP_VERSION} ・ 端末 ${app.deviceId.slice(0, 8)}`)));
   document.body.append(overlay);
 }

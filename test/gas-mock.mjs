@@ -57,6 +57,21 @@ class Sheet {
     }
   }
   setFrozenRows() {}
+  /** 行を消して、下の行を詰める（実物と同じく行数も減る） */
+  deleteRows(start, n) {
+    const move = (map) => {
+      const next = new Map();
+      for (const [k, v] of map) {
+        const [r, c] = k.split(':').map(Number);
+        if (r >= start && r < start + n) continue;
+        next.set(this._key(r >= start + n ? r - n : r, c), v);
+      }
+      return next;
+    };
+    this.cells = move(this.cells);
+    this.formats = move(this.formats);
+    this.maxRows -= n;
+  }
   getProtections() { return this.protection ? [this.protection] : []; }
   protect() {
     const editors = new Set(['owner@example.com', 'tencho@example.com']);

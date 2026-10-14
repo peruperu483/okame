@@ -249,3 +249,51 @@ test('レジからの出金は仕入れにも「レジから」で1件入る。�
   assert.equal(env.call('fetch', { table: 'purchases', mgrToken }).rows.length, 1);
   assert.equal(env.ss.getSheetByName('レジの出し入れ').dump().length, 2);
 });
+
+test('テストの行を消す：テストの名前・試運転の印・運用開始日より前の行だけ消し、ほかは残す', () => {
+  const env = boot(); // 今は 2026-10-20
+  const mgrToken = env.login();
+  const ops = [
+    visit('t1', { name: 'テストA1', bizDate: '2026-11-05', trial: false }),     // 名前がテスト → 消す
+    visit('r1', { name: '佐藤', bizDate: '2026-11-05', trial: false }),         // 本番 → 残す
+    visit('t2', { name: '', bizDate: '2026-10-30', trial: true }),              // 試運転 → 消す
+    visit('r2', { name: '鈴木', bizDate: '2026-11-06', trial: false }),         // 本番 → 残す
+    { opId: 'c1', table: 'closings', id: '2026-10-30', data: { bizDate: '2026-10-30', countedCash: 140900, trial: true } },
+    { opId: 'c2', table: 'closings', id: '2026-11-05', data: { bizDate: '2026-11-05', countedCash: 30000, trial: false } },
+    { opId: 'm1', table: 'cashMoves', id: 'm1', data: { bizDate: '2026-10-30', type: '出金', amount: 1500, category: '飲食物', status: '有効' } },
+    { opId: 'm2', table: 'cashMoves', id: 'm2', data: { bizDate: '2026-11-05', type: '出金', amount: 2000, category: '備品', status: '有効' } },
+    { opId: 'd1', table: 'days', id: '2026-10-30', data: { bizDate: '2026-10-30', openCash: 20000 } },
+    { opId: 'd2', table: 'days', id: '2026-11-20', data: { bizDate: '2026-11-20', shiftPlan: '加奈' } },
+    { opId: 'e1', table: 'events', id: 'e1', data: { date: '2026-10-30', type: '団体', title: '残す予定' } },
+    { opId: 'l1', table: 'log', id: 'l1', data: { at: '2026-10-30T20:00:00+09:00', type: '会計の取り消し', reason: '打ち間違い' } },
+    { opId: 'l2', table: 'log', id: 'l2', data: { at: '2026-11-05T20:00:00+09:00', type: '会計の取り消し', reason: '打ち間違い' } }
+  ];
+  for (const op of ops) env.call('sync', { mgrToken, ops: [op] });
+  env.call('sync', { mgrToken, ops: [{ opId: 's', table: 'staff', id: 's1', data: { name: '加奈', wage: 2000, active: true } }] });
+
+  const count = () => Object.fromEntries(env.gas.findTestRows_().map(f => [f.sheet, f.rows.length]));
+  const before = count();
+  assert.deepEqual(before, { '来客': 2, '締め': 1, 'レジの出し入れ': 1, '営業日': 1, '仕入れ': 1, '操作履歴': 1 });
+
+  const done = env.gas.deleteTestRows_();
+  assert.equal(done.find(f => f.sheet === '来客').rows.length, 2);
+  const names = env.ss.getSheetByName('来客').dump().map(r => r['名前']);
+  assert.deepEqual(names, ['佐藤', '鈴木']);
+  assert.deepEqual(env.ss.getSheetByName('締め').dump().map(r => r['営業日']), ['2026-11-05']);
+  assert.deepEqual(env.ss.getSheetByName('レジの出し入れ').dump().map(r => r['ID']), ['m2']);
+  assert.deepEqual(env.ss.getSheetByName('仕入れ').dump().map(r => r['ID']), ['cm-m2']);
+  assert.deepEqual(env.ss.getSheetByName('営業日').dump().map(r => r['営業日']), ['2026-11-20']);
+  assert.equal(env.ss.getSheetByName('予定').dump().length, 1);
+  assert.equal(env.ss.getSheetByName('スタッフ').dump().length, 1);
+  // 操作履歴：本番の日付の行は残り、最後に「消した」記録が1行増える（中身は各表の件数）
+  const log = env.ss.getSheetByName('操作履歴').dump();
+  assert.deepEqual(log.map(r => r['ID']), ['l2', log[1]['ID']]);
+  assert.equal(log[1]['種別'], 'テストの行を消す');
+  assert.equal(log[1]['操作者'], 'スプシのメニュー');
+  assert.equal(JSON.parse(log[1]['変更後'])['来客'], 2);
+  // 残った行はアプリから今までどおり読める・書ける
+  assert.deepEqual(env.call('fetch', { table: 'visits' }).rows.map(r => r.name), ['佐藤', '鈴木']);
+  assert.equal(env.call('sync', { ops: [visit('r3', { name: '高橋', bizDate: '2026-11-07' })] }).results[0].ok, true);
+  // もう一度探すと、消した記録の1行（運用開始日より前）だけが出る
+  assert.deepEqual(Object.values(count()).reduce((a, b) => a + b, 0), 1);
+});

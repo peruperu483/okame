@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.2.0';
+var APP_VERSION = '0.3.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -185,7 +185,75 @@ function onOpen() {
     .addItem('初期設定（タブを作る・直す）', 'setup')
     .addItem('共有トークンを表示', 'showToken')
     .addItem('暗証番号を作り直す', 'resetPin')
+    .addSeparator()
+    .addItem('テストの行を消す', 'deleteTestRows')
+    .addItem('共有トークンを作り直す', 'rotateTokenWithConfirm')
     .addToUi();
+}
+
+// ===== 試運転の前の片付け =====
+var CLEANUP_TABLES = ['visits', 'closings', 'cashMoves', 'days', 'purchases', 'log'];
+
+/**
+ * 消す行を探す（消さない）。
+ * 名前が「テスト」で始まる来客／試運転の印が付いた行／運用開始日より前の日付の行（印の列がない表も、これで拾う）
+ * @return {{key: string, sheet: string, rows: number[]}[]} rows はシートの行番号
+ */
+function findTestRows_() {
+  var goLive = String(getSettings_().goLiveDate || '');
+  return CLEANUP_TABLES.map(function (key) {
+    var def = TABLES[key];
+    var rows = [];
+    readTable_(def).rows.forEach(function (r, i) {
+      var d = String(r[def.dateKey] || '').slice(0, 10);
+      var isTestName = key === 'visits' && /^テスト/.test(String(r.name || ''));
+      if (isTestName || r.trial === true || (goLive && d && d < goLive)) rows.push(i + 2);
+    });
+    return { key: key, sheet: def.sheet, rows: rows };
+  });
+}
+
+/** スプシのメニュー：件数を出して、確かめてから消す */
+function deleteTestRows() {
+  var ui = SpreadsheetApp.getUi();
+  var found = findTestRows_();
+  var total = found.reduce(function (a, f) { return a + f.rows.length; }, 0);
+  if (!total) { ui.alert('消す行はありません。'); return; }
+  var list = found.map(function (f) { return f.sheet + '：' + f.rows.length + '行'; }).join('\n');
+  var msg = '次の行を消します。元には戻せません。\n\n' + list +
+    '\n\n消すのは、名前が「テスト」で始まる来客・試運転の印が付いた行・運用開始日（' + getSettings_().goLiveDate + '）より前の日付の行です。' +
+    '\nスタッフ・予定・希望休・設定は消しません。\n\n消してよいですか？';
+  if (ui.alert('テストの行を消す', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) { ui.alert('やめました。何も消していません。'); return; }
+  var done = withLock_(deleteTestRows_);
+  ui.alert('消しました。\n\n' + done.map(function (f) { return f.sheet + '：' + f.rows.length + '行'; }).join('\n'));
+}
+
+/** 消す（ロックの中で探し直し、下の行から、続いている行はまとめて消す）。最後に操作履歴に1行残す */
+function deleteTestRows_() {
+  var found = findTestRows_();
+  var ss = SpreadsheetApp.getActive();
+  found.forEach(function (f) {
+    var sh = ss.getSheetByName(f.sheet);
+    var rows = f.rows.slice().sort(function (a, b) { return b - a; });
+    for (var i = 0; i < rows.length; i++) {
+      var end = rows[i], start = end;
+      while (i + 1 < rows.length && rows[i + 1] === start - 1) start = rows[++i];
+      sh.deleteRows(start, end - start + 1);
+    }
+  });
+  var counts = {};
+  found.forEach(function (f) { counts[f.sheet] = f.rows.length; });
+  appendLog_({ type: 'テストの行を消す', table: '', targetId: '', after: counts, by: 'スプシのメニュー' }, { deviceId: 'spreadsheet' });
+  return found;
+}
+
+/** スプシのメニュー：確かめてから共有トークンを作り直す */
+function rotateTokenWithConfirm() {
+  var ui = SpreadsheetApp.getUi();
+  var msg = '作り直すと、今つないでいる端末（タブレット・スマホ）はすべて、新しいトークンを入れ直すまで送れなくなります。' +
+    '\n先に、すべての端末の上の表示が「送信済み」（送信待ち0件）であることを確かめてください。\n\n作り直してよいですか？';
+  if (ui.alert('共有トークンを作り直す', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) { ui.alert('やめました。トークンはそのままです。'); return; }
+  rotateToken();
 }
 
 // ===== 初期設定（何度実行しても壊れない）=====
@@ -414,7 +482,7 @@ function upsert_(tableKey, ops, ctx) {
   ops.forEach(function (op) {
     var data = cleanIncoming_(def, op.data, ctx);
     data.id = String(op.id);
-    if (tableKey === 'log') data.by = ctx.mgr ? '店長' : 'スタッフ';
+    if (tableKey === 'log') data.by = ctx.by || (ctx.mgr ? '店長' : 'スタッフ');
     var hit = index[data.id];
     if (hit && def.appendOnly) { results.push({ opId: op.opId, ok: true, dup: true }); return; }
     var cur = hit ? (hit.fresh != null ? fresh[hit.fresh] : t.rows[hit.at]) : null;
@@ -478,7 +546,7 @@ function stripHidden_(def, row, ctx) {
 
 function appendLog_(entry, ctx) {
   var e = merge_({ id: Utilities.getUuid(), at: nowIso_(), deviceId: ctx.deviceId }, entry);
-  upsert_('log', [{ opId: e.id, id: e.id, data: e }], { mgr: entry.by === '店長', deviceId: ctx.deviceId });
+  upsert_('log', [{ opId: e.id, id: e.id, data: e }], { mgr: entry.by === '店長', by: entry.by, deviceId: ctx.deviceId });
 }
 
 // ===== 表の読み書きの下回り =====

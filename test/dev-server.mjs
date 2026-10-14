@@ -10,6 +10,8 @@ const ROOT = fileURLToPath(new URL('../v2/', import.meta.url));
 const env = loadGas(fileURLToPath(new URL('../gas/Code.gs', import.meta.url)));
 env.gas.setup();
 const port = Number(process.argv[2] || 8787);
+// --real：GASのまねを使わず、v2/config.js（本物のGAS）のまま配る。本物のGASで画面を確かめるとき用
+const REAL = process.argv.includes('--real');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 
 http.createServer((req, res) => {
@@ -23,7 +25,7 @@ http.createServer((req, res) => {
     });
     return;
   }
-  if (url.pathname === '/config.js') {
+  if (url.pathname === '/config.js' && !REAL) {
     res.writeHead(200, { 'Content-Type': 'text/javascript' });
     res.end("export const GAS_URL = '/gas';\nexport const APP_VERSION = 'dev';\n");
     return;

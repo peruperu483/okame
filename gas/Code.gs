@@ -144,7 +144,7 @@ var DEFAULT_SETTINGS = {
   purchaseCategories: ['飲食物', '備品', 'その他'],
   purchaseRules: [],
   cashInReasons: ['オーナーの補充', 'その他'],
-  fixedCostItems: ['家賃', 'ガス', '電気', 'カラオケ'],
+  fixedCostItems: ['家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険'],
   eventTypes: ['団体', '日本酒の会', '貸切'],
   visibility: { eventContact: true },
   // days=0 はその営業日だけ。1なら前日まで。未来の日付（予定・希望休）はいつでも
@@ -773,7 +773,8 @@ function buildMonthlySheet_() {
     });
   }
   var months = [];
-  for (var m = first; m <= now; m = nextMonth_(m)) months.push(m);
+  var last = now > first ? now : first; // 運用開始の前でも、少なくとも運用開始の月は作る
+  for (var m = first; m <= last; m = nextMonth_(m)) months.push(m);
   var sums = months.map(function (mm) { return monthlySummary_(mm, settings); });
   var staffNames = [], fixedItems = [];
   sums.forEach(function (s) {

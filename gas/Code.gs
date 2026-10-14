@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.3.0';
+var APP_VERSION = '0.4.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -78,7 +78,8 @@ var TABLES = {
     sheet: '勤怠', read: 'mgr', write: 'mgr', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['staffId', 'スタッフID', 't'], ['name', '名前', 't'],
-      ['hours', '勤務時間', 'n'], ['wage', '時給', 'n'], ['cost', '人件費', 'n'], ['status', '状態', 't']
+      ['kind', '種別', 't'], ['hours', '勤務時間', 'n'], ['wage', '時給', 'n'], ['transport', '交通費', 'n'],
+      ['amount', '金額（手打ち）', 'n'], ['cost', '人件費', 'n'], ['status', '状態', 't'], ['edited', '修正あり', 'b']
     ].concat(COMMON_TAIL)
   },
   // 科目は 飲食物／備品／その他。その他は内容が必須で、表示は「その他（花）」
@@ -88,13 +89,13 @@ var TABLES = {
       ['id', 'ID', 't'], ['date', '日付', 't'], ['category', '科目', 't'], ['note', '内容', 't'],
       ['label', '科目（表示）', 't'], ['shop', '店名', 't'], ['amount', '金額', 'n'],
       ['paidFrom', '支払い元', 't'], ['moveId', '出し入れID', 't'],
-      ['receipts', 'レシート', 'j'], ['source', '入力方法', 't'], ['status', '状態', 't']
+      ['receipts', 'レシート', 'j'], ['source', '入力方法', 't'], ['status', '状態', 't'], ['edited', '修正あり', 'b']
     ].concat(COMMON_TAIL)
   },
   fixedCosts: {
     sheet: '固定費', read: 'mgr', write: 'mgr', dateKey: 'month',
     cols: [
-      ['id', 'ID', 't'], ['month', '月', 't'], ['item', '項目', 't'], ['amount', '金額', 'n'], ['status', '状態', 't']
+      ['id', 'ID', 't'], ['month', '月', 't'], ['item', '項目', 't'], ['amount', '金額', 'n'], ['status', '状態', 't'], ['edited', '修正あり', 'b']
     ].concat(COMMON_TAIL)
   },
   events: {
@@ -186,13 +187,18 @@ function onOpen() {
     .addItem('共有トークンを表示', 'showToken')
     .addItem('暗証番号を作り直す', 'resetPin')
     .addSeparator()
+    .addItem('月次を作り直す', 'buildMonthlySheet')
+    .addSeparator()
     .addItem('テストの行を消す', 'deleteTestRows')
     .addItem('共有トークンを作り直す', 'rotateTokenWithConfirm')
     .addToUi();
 }
 
 // ===== 試運転の前の片付け =====
-var CLEANUP_TABLES = ['visits', 'closings', 'cashMoves', 'days', 'purchases', 'log'];
+var CLEANUP_TABLES = ['visits', 'closings', 'cashMoves', 'days', 'purchases', 'log', 'attendance', 'fixedCosts', 'events', 'requests', 'staff'];
+// 日付で消す表（運用開始日より前は試運転）。予定・希望休・スタッフは、名前が「テスト」で始まる行だけ消す
+var CLEANUP_BY_DATE = ['visits', 'closings', 'cashMoves', 'days', 'purchases', 'log', 'attendance', 'fixedCosts'];
+var TEST_NAME_KEY = { visits: 'name', attendance: 'name', events: 'title', requests: 'name', staff: 'name' };
 
 /**
  * 消す行を探す（消さない）。
@@ -206,8 +212,9 @@ function findTestRows_() {
     var rows = [];
     readTable_(def).rows.forEach(function (r, i) {
       var d = String(r[def.dateKey] || '').slice(0, 10);
-      var isTestName = key === 'visits' && /^テスト/.test(String(r.name || ''));
-      if (isTestName || r.trial === true || (goLive && d && d < goLive)) rows.push(i + 2);
+      var isTestName = !!TEST_NAME_KEY[key] && /^テスト/.test(String(r[TEST_NAME_KEY[key]] || ''));
+      var beforeGoLive = CLEANUP_BY_DATE.indexOf(key) >= 0 && goLive && d && d < goLive.slice(0, d.length);
+      if (isTestName || r.trial === true || beforeGoLive) rows.push(i + 2);
     });
     return { key: key, sheet: def.sheet, rows: rows };
   });
@@ -221,8 +228,8 @@ function deleteTestRows() {
   if (!total) { ui.alert('消す行はありません。'); return; }
   var list = found.map(function (f) { return f.sheet + '：' + f.rows.length + '行'; }).join('\n');
   var msg = '次の行を消します。元には戻せません。\n\n' + list +
-    '\n\n消すのは、名前が「テスト」で始まる来客・試運転の印が付いた行・運用開始日（' + getSettings_().goLiveDate + '）より前の日付の行です。' +
-    '\nスタッフ・予定・希望休・設定は消しません。\n\n消してよいですか？';
+    '\n\n消すのは、試運転の印が付いた行・運用開始日（' + getSettings_().goLiveDate + '）より前の日付の行・名前が「テスト」で始まる行です。' +
+    '\n予定・希望休・スタッフは、名前が「テスト」で始まる行だけ消します。設定は消しません。\n\n消してよいですか？';
   if (ui.alert('テストの行を消す', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) { ui.alert('やめました。何も消していません。'); return; }
   var done = withLock_(deleteTestRows_);
   ui.alert('消しました。\n\n' + done.map(function (f) { return f.sheet + '：' + f.rows.length + '行'; }).join('\n'));
@@ -394,6 +401,15 @@ function handle_(body) {
     case 'saveSettings':
       requireMgr_(ctx);
       return ok_({ settings: withLock_(function () { return saveSettings_(body.settings || {}, ctx); }) });
+    case 'monthly': {
+      requireMgr_(ctx);
+      var month = String(body.month || '');
+      if (!/^\d{4}-\d{2}$/.test(month)) fail_('bad_month', '月の形が違います（例：2026-11）。');
+      return ok_({ summary: monthlySummary_(month, settings), prev: monthlySummary_(prevMonth_(month), settings) });
+    }
+    case 'buildMonthlySheet':
+      requireMgr_(ctx);
+      return ok_(withLock_(buildMonthlySheet_));
     case 'changePin':
       requireMgr_(ctx);
       if (!/^\d{4,8}$/.test(String(body.newPin || ''))) fail_('bad_pin', '暗証番号は4〜8桁の数字にしてください。');
@@ -621,6 +637,194 @@ function formatOf_(type) {
 function formatDateCell_(d) {
   var hms = Utilities.formatDate(d, TZ, 'HH:mm:ss');
   return hms === '00:00:00' ? Utilities.formatDate(d, TZ, 'yyyy-MM-dd') : Utilities.formatDate(d, TZ, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+// ===== 月次 =====
+// アプリの分析画面とスプシの「月次」タブは、どちらもここで計算する（数字を1か所にそろえる）
+// 運用開始日より前の記録（試運転）は数えない。8〜10月は「過去の月次」タブ（管理シートからの取り込み）から読む
+var LEGACY_SHEET = '過去の月次';
+
+function monthOf_(d) { return String(d || '').slice(0, 7); }
+function prevMonth_(m) { var p = m.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 2, 1)).toISOString().slice(0, 7); }
+function counted_(d, goLive) { d = String(d || ''); return !goLive || d >= goLive.slice(0, Math.min(10, d.length)); }
+
+/** その月の数字。legacy=true は「過去の月次」タブから読んだもの */
+function monthlySummary_(month, settings) {
+  settings = settings || getSettings_();
+  var goLive = String(settings.goLiveDate || '');
+  if (goLive && month < goLive.slice(0, 7)) {
+    var legacy = legacySummary_(month);
+    if (legacy) return legacy;
+  }
+  var n = function (v) { return Number(v) || 0; };
+  var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
+  var s = {
+    month: month, legacy: false, sales: 0, guests: 0, groups: 0, cash: 0, cashless: 0, point: 0,
+    nomi: 0, tanpin: 0, event: 0, eventGroups: 0, openDays: 0, closedDays: 0, zeroDays: [],
+    purchases: { '飲食物': 0, '備品': 0, 'その他': 0 }, otherNotes: [], purchaseTotal: 0,
+    fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: 0, count: 0, names: [] }, laborTotal: 0,
+    plannedEvents: 0
+  };
+  var kindKey = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
+  var openDays = {};
+  readTable_(TABLES.visits).rows.forEach(function (v) {
+    if (v.status !== '退店' || v.trial === true || !inMonth(v.bizDate)) return;
+    var amount = n(v.total) - (settings.pointCountsAsSales === false ? n(v.point) : 0);
+    s.sales += amount; s.guests += n(v.people); s.groups += 1;
+    s.cash += n(v.cash); s.cashless += n(v.cashless); s.point += n(v.point);
+    if (kindKey[v.kind]) s[kindKey[v.kind]] += amount;
+    if (v.kind === 'イベント') s.eventGroups += 1;
+    openDays[v.bizDate] = true;
+  });
+  readTable_(TABLES.closings).rows.forEach(function (c) {
+    if (c.trial === true || !inMonth(c.bizDate)) return;
+    openDays[c.bizDate] = true;
+    if (n(c.sales) === 0) s.zeroDays.push(c.bizDate);
+  });
+  s.openDays = Object.keys(openDays).length;
+  readTable_(TABLES.days).rows.forEach(function (d) { if (d.closed === true && inMonth(d.bizDate)) s.closedDays += 1; });
+  readTable_(TABLES.purchases).rows.forEach(function (p) {
+    if (p.status === '削除' || !inMonth(p.date)) return;
+    var cat = s.purchases[p.category] != null ? p.category : 'その他';
+    s.purchases[cat] += n(p.amount); s.purchaseTotal += n(p.amount);
+    if (cat === 'その他' && p.note && s.otherNotes.indexOf(p.note) < 0) s.otherNotes.push(p.note);
+  });
+  readTable_(TABLES.fixedCosts).rows.forEach(function (f) {
+    if (f.status === '削除' || f.month !== month || !counted_(f.month, goLive)) return;
+    s.fixed[f.item] = (s.fixed[f.item] || 0) + n(f.amount); s.fixedTotal += n(f.amount);
+  });
+  var byStaff = {};
+  readTable_(TABLES.attendance).rows.forEach(function (a) {
+    if (a.status === '削除' || !inMonth(a.bizDate)) return;
+    s.laborTotal += n(a.cost);
+    if (a.kind === '手打ち') {
+      s.laborOthers.cost += n(a.cost); s.laborOthers.count += 1;
+      if (a.name && s.laborOthers.names.indexOf(a.name) < 0) s.laborOthers.names.push(a.name);
+      return;
+    }
+    var k = a.staffId || a.name;
+    var r = byStaff[k] = byStaff[k] || { name: a.name, days: 0, hours: 0, transport: 0, cost: 0 };
+    r.days += 1; r.hours += n(a.hours); r.transport += n(a.transport); r.cost += n(a.cost);
+  });
+  s.laborFixed = Object.keys(byStaff).map(function (k) { return byStaff[k]; });
+  readTable_(TABLES.events).rows.forEach(function (e) {
+    if (e.status !== '削除' && inMonth(e.date) && (settings.eventTypes || []).indexOf(e.type) >= 0) s.plannedEvents += 1;
+  });
+  return finishSummary_(s, settings);
+}
+
+/** 合計・率・目標など、記録から出す数字を足す */
+function finishSummary_(s, settings) {
+  var t = settings.targets || {};
+  s.expenses = s.purchaseTotal + s.fixedTotal + s.laborTotal;
+  s.profitBeforeMgr = s.sales - s.expenses;
+  s.mgrFee = null; // 店長の報酬（利益連動）。計算はあとで足す
+  s.avgPerGuest = s.guests ? Math.round(s.sales / s.guests) : 0;
+  s.normalDailyAvg = s.openDays ? Math.round((s.sales - s.event) / s.openDays) : 0;
+  s.laborRate = s.sales ? Math.round(s.laborTotal / s.sales * 1000) / 10 : 0;
+  s.costRate = s.sales ? Math.round(s.purchases['飲食物'] / s.sales * 1000) / 10 : 0;
+  s.target = {
+    monthlySales: Number(t.monthlySales) || 0, salesRate: t.monthlySales ? Math.round(s.sales / t.monthlySales * 100) : 0,
+    dailyGuests: Number(t.dailyGuests) || 0, avgGuestsPerDay: s.openDays ? Math.round(s.guests / s.openDays * 10) / 10 : 0,
+    monthlyEvents: Number(t.monthlyEvents) || 0, events: s.eventGroups
+  };
+  return s;
+}
+
+/** 「過去の月次」タブ（1列目が項目、2行目から。1行目が月 YYYY-MM）から、その月の数字を読む。なければ null */
+function legacySummary_(month) {
+  var sh = SpreadsheetApp.getActive().getSheetByName(LEGACY_SHEET);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var col = vals[0].map(function (h) { return h instanceof Date ? Utilities.formatDate(h, TZ, 'yyyy-MM') : String(h).slice(0, 7); }).indexOf(month);
+  if (col < 1) return null;
+  var get = function (label) {
+    for (var i = 1; i < vals.length; i++) if (String(vals[i][0]).trim() === label) return Number(vals[i][col]) || 0;
+    return 0;
+  };
+  var s = {
+    month: month, legacy: true, sales: get('売上'), guests: get('来客数'), groups: get('組数'),
+    cash: get('現金'), cashless: get('キャッシュレス'), point: get('ポイント'),
+    nomi: 0, tanpin: 0, event: get('イベント'), eventGroups: get('イベントの組数'), openDays: get('営業日数'),
+    closedDays: get('店休日'), zeroDays: [], purchases: { '飲食物': get('飲食物'), '備品': get('備品'), 'その他': get('その他') },
+    otherNotes: [], fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: get('人件費（その他）'), count: 0, names: [] },
+    plannedEvents: 0
+  };
+  s.purchaseTotal = s.purchases['飲食物'] + s.purchases['備品'] + s.purchases['その他'];
+  ['家賃', 'ガス電気カラオケ'].forEach(function (k) { var v = get(k); if (v) { s.fixed[k] = v; s.fixedTotal += v; } });
+  vals.slice(1).forEach(function (r) {
+    var m = /^人件費（(.+)）$/.exec(String(r[0]).trim());
+    if (m && m[1] !== 'その他') s.laborFixed.push({ name: m[1], days: 0, hours: 0, transport: 0, cost: Number(r[col]) || 0 });
+  });
+  s.laborTotal = s.laborOthers.cost + s.laborFixed.reduce(function (a, r) { return a + r.cost; }, 0);
+  return finishSummary_(s, getSettings_());
+}
+
+/** スプシの「月次」タブを作り直す（項目×月） */
+function buildMonthlySheet_() {
+  var settings = getSettings_();
+  var now = Utilities.formatDate(now_(), TZ, 'yyyy-MM');
+  var first = String(settings.goLiveDate || now).slice(0, 7);
+  var legacy = SpreadsheetApp.getActive().getSheetByName(LEGACY_SHEET);
+  if (legacy && legacy.getLastColumn() > 1) {
+    legacy.getRange(1, 2, 1, legacy.getLastColumn() - 1).getValues()[0].forEach(function (h) {
+      var m = h instanceof Date ? Utilities.formatDate(h, TZ, 'yyyy-MM') : String(h).slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(m) && m < first) first = m;
+    });
+  }
+  var months = [];
+  for (var m = first; m <= now; m = nextMonth_(m)) months.push(m);
+  var sums = months.map(function (mm) { return monthlySummary_(mm, settings); });
+  var staffNames = [], fixedItems = [];
+  sums.forEach(function (s) {
+    s.laborFixed.forEach(function (r) { if (staffNames.indexOf(r.name) < 0) staffNames.push(r.name); });
+    Object.keys(s.fixed).forEach(function (k) { if (fixedItems.indexOf(k) < 0) fixedItems.push(k); });
+  });
+  var rows = [
+    ['売上', function (s) { return s.sales; }],
+    ['　現金', function (s) { return s.cash; }], ['　キャッシュレス', function (s) { return s.cashless; }], ['　ポイント', function (s) { return s.point; }],
+    ['　飲み放題', function (s) { return s.nomi; }], ['　単品', function (s) { return s.tanpin; }], ['　イベント', function (s) { return s.event; }],
+    ['来客数', function (s) { return s.guests; }], ['組数', function (s) { return s.groups; }], ['客単価', function (s) { return s.avgPerGuest; }],
+    ['営業日数', function (s) { return s.openDays; }], ['店休日', function (s) { return s.closedDays; }],
+    ['売上0円の営業日', function (s) { return s.zeroDays.join('、'); }], ['通常営業の1日平均', function (s) { return s.normalDailyAvg; }],
+    ['イベントの組数', function (s) { return s.eventGroups; }],
+    ['仕入れ', function (s) { return s.purchaseTotal; }],
+    ['　飲食物', function (s) { return s.purchases['飲食物']; }], ['　備品', function (s) { return s.purchases['備品']; }],
+    ['　その他', function (s) { return s.purchases['その他']; }], ['　その他の内容', function (s) { return s.otherNotes.join('・'); }],
+    ['固定費', function (s) { return s.fixedTotal; }]
+  ].concat(fixedItems.map(function (k) { return ['　' + k, function (s) { return s.fixed[k] || 0; }]; }))
+    .concat([['人件費', function (s) { return s.laborTotal; }]])
+    .concat(staffNames.map(function (nm) { return ['　' + nm, function (s) { var r = s.laborFixed.filter(function (x) { return x.name === nm; })[0]; return r ? r.cost : 0; }]; }))
+    .concat([
+      ['　人件費（その他）', function (s) { return s.laborOthers.cost; }],
+      ['支出', function (s) { return s.expenses; }],
+      ['差し引き（店長報酬前）', function (s) { return s.profitBeforeMgr; }],
+      ['店長報酬（あとで）', function () { return ''; }],
+      ['人件費率（%）', function (s) { return s.laborRate; }],
+      ['原価率（飲食物・%）', function (s) { return s.costRate; }],
+      ['取り込み', function (s) { return s.legacy ? '管理シート' : 'アプリ'; }]
+    ]);
+  var values = [['項目'].concat(months)].concat(rows.map(function (r) { return [r[0]].concat(sums.map(r[1])); }));
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName('月次') || ss.insertSheet('月次');
+  if (sh.getLastRow()) sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn(), 1)).clearContent();
+  if (sh.getMaxColumns() < values[0].length) sh.insertColumnsAfter(sh.getMaxColumns(), values[0].length - sh.getMaxColumns());
+  var rng = sh.getRange(1, 1, values.length, values[0].length);
+  rng.setNumberFormat('@');
+  if (values[0].length > 1) sh.getRange(2, 2, values.length - 1, values[0].length - 1).setNumberFormat('#,##0.#');
+  rng.setValues(values);
+  sh.setFrozenRows(1);
+  sh.setFrozenColumns(1);
+  protect_(sh);
+  return { months: months, rows: values.length - 1 };
+}
+
+function nextMonth_(m) { var p = m.split('-').map(Number); return new Date(Date.UTC(p[0], p[1], 1)).toISOString().slice(0, 7); }
+
+/** スプシのメニュー */
+function buildMonthlySheet() {
+  var r = buildMonthlySheet_();
+  notify_('「月次」タブを作り直しました（' + r.months[0] + '〜' + r.months[r.months.length - 1] + '）。');
 }
 
 // ===== 設定 =====

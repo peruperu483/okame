@@ -265,15 +265,21 @@ test('テストの行を消す：テストの名前・試運転の印・運用�
     { opId: 'd1', table: 'days', id: '2026-10-30', data: { bizDate: '2026-10-30', openCash: 20000 } },
     { opId: 'd2', table: 'days', id: '2026-11-20', data: { bizDate: '2026-11-20', shiftPlan: '加奈' } },
     { opId: 'e1', table: 'events', id: 'e1', data: { date: '2026-10-30', type: '団体', title: '残す予定' } },
+    { opId: 'e2', table: 'events', id: 'e2', data: { date: '2026-11-20', type: '団体', title: 'テスト会' } },
+    { opId: 'a1', table: 'attendance', id: 'a1', data: { bizDate: '2026-10-30', name: '加奈', kind: '固定', hours: 5, cost: 10000 } },
+    { opId: 'a2', table: 'attendance', id: 'a2', data: { bizDate: '2026-11-05', name: '加奈', kind: '固定', hours: 5, cost: 10000 } },
+    { opId: 'f1', table: 'fixedCosts', id: '2026-10|家賃', data: { month: '2026-10', item: '家賃', amount: 100000 } },
+    { opId: 'f2', table: 'fixedCosts', id: '2026-11|家賃', data: { month: '2026-11', item: '家賃', amount: 100000 } },
     { opId: 'l1', table: 'log', id: 'l1', data: { at: '2026-10-30T20:00:00+09:00', type: '会計の取り消し', reason: '打ち間違い' } },
     { opId: 'l2', table: 'log', id: 'l2', data: { at: '2026-11-05T20:00:00+09:00', type: '会計の取り消し', reason: '打ち間違い' } }
   ];
   for (const op of ops) env.call('sync', { mgrToken, ops: [op] });
   env.call('sync', { mgrToken, ops: [{ opId: 's', table: 'staff', id: 's1', data: { name: '加奈', wage: 2000, active: true } }] });
+  env.call('sync', { mgrToken, ops: [{ opId: 's2', table: 'staff', id: 's2', data: { name: 'テスト太郎', wage: 2000, active: true } }] });
 
   const count = () => Object.fromEntries(env.gas.findTestRows_().map(f => [f.sheet, f.rows.length]));
   const before = count();
-  assert.deepEqual(before, { '来客': 2, '締め': 1, 'レジの出し入れ': 1, '営業日': 1, '仕入れ': 1, '操作履歴': 1 });
+  assert.deepEqual(before, { '来客': 2, '締め': 1, 'レジの出し入れ': 1, '営業日': 1, '仕入れ': 1, '操作履歴': 1, '勤怠': 1, '固定費': 1, '予定': 1, '希望休': 0, 'スタッフ': 1 });
 
   const done = env.gas.deleteTestRows_();
   assert.equal(done.find(f => f.sheet === '来客').rows.length, 2);
@@ -283,8 +289,10 @@ test('テストの行を消す：テストの名前・試運転の印・運用�
   assert.deepEqual(env.ss.getSheetByName('レジの出し入れ').dump().map(r => r['ID']), ['m2']);
   assert.deepEqual(env.ss.getSheetByName('仕入れ').dump().map(r => r['ID']), ['cm-m2']);
   assert.deepEqual(env.ss.getSheetByName('営業日').dump().map(r => r['営業日']), ['2026-11-20']);
-  assert.equal(env.ss.getSheetByName('予定').dump().length, 1);
-  assert.equal(env.ss.getSheetByName('スタッフ').dump().length, 1);
+  assert.deepEqual(env.ss.getSheetByName('予定').dump().map(r => r['内容']), ['残す予定']);
+  assert.deepEqual(env.ss.getSheetByName('スタッフ').dump().map(r => r['名前']), ['加奈']);
+  assert.deepEqual(env.ss.getSheetByName('勤怠').dump().map(r => r['ID']), ['a2']);
+  assert.deepEqual(env.ss.getSheetByName('固定費').dump().map(r => r['ID']), ['2026-11|家賃']);
   // 操作履歴：本番の日付の行は残り、最後に「消した」記録が1行増える（中身は各表の件数）
   const log = env.ss.getSheetByName('操作履歴').dump();
   assert.deepEqual(log.map(r => r['ID']), ['l2', log[1]['ID']]);
@@ -296,4 +304,85 @@ test('テストの行を消す：テストの名前・試運転の印・運用�
   assert.equal(env.call('sync', { ops: [visit('r3', { name: '高橋', bizDate: '2026-11-07' })] }).results[0].ok, true);
   // もう一度探すと、消した記録の1行（運用開始日より前）だけが出る
   assert.deepEqual(Object.values(count()).reduce((a, b) => a + b, 0), 1);
+});
+
+test('月次：退店した組・仕入れ・固定費・人件費から出す。試運転と運用開始日より前は数えない', () => {
+  const env = boot();
+  env.setNow('2026-11-30T20:00:00+09:00');
+  const mgrToken = env.login();
+  const v = (id, extra) => ({ opId: 'o' + id, table: 'visits', id, data: { bizDate: '2026-11-05', status: '退店', trial: false, ...extra } });
+  const ops = [
+    v('v1', { kind: '飲み放題', people: 2, total: 6000, cash: 6000 }),
+    v('v2', { kind: 'イベント', people: 8, total: 40000, cash: 36000, point: 4000 }),
+    v('v3', { kind: '単品', people: 1, total: 1500, cashless: 1500, bizDate: '2026-11-06' }),
+    v('v4', { kind: '飲み放題', people: 3, total: 9000, cash: 9000, status: '店内' }),         // 店内は数えない
+    v('v5', { kind: '飲み放題', people: 3, total: 9000, cash: 9000, trial: true }),           // 試運転は数えない
+    v('v6', { kind: '飲み放題', people: 3, total: 9000, cash: 9000, bizDate: '2026-10-31' }), // 運用開始日より前
+    { opId: 'c1', table: 'closings', id: '2026-11-05', data: { bizDate: '2026-11-05', sales: 46000, trial: false } },
+    { opId: 'c2', table: 'closings', id: '2026-11-07', data: { bizDate: '2026-11-07', sales: 0, trial: false } },
+    { opId: 'd1', table: 'days', id: '2026-11-10', data: { bizDate: '2026-11-10', closed: true } },
+    { opId: 'p1', table: 'purchases', id: 'p1', data: { date: '2026-11-05', category: '飲食物', amount: 5000, status: '有効' } },
+    { opId: 'p2', table: 'purchases', id: 'p2', data: { date: '2026-11-06', category: 'その他', note: '花', amount: 1000, status: '有効' } },
+    { opId: 'p3', table: 'purchases', id: 'p3', data: { date: '2026-11-06', category: '備品', amount: 700, status: '削除' } },
+    { opId: 'f1', table: 'fixedCosts', id: '2026-11|家賃', data: { month: '2026-11', item: '家賃', amount: 100000 } },
+    { opId: 'a1', table: 'attendance', id: 'a1', data: { bizDate: '2026-11-05', staffId: 's1', name: '加奈', kind: '固定', hours: 5, wage: 2000, transport: 2000, cost: 12000 } },
+    { opId: 'a2', table: 'attendance', id: 'a2', data: { bizDate: '2026-11-06', staffId: 's1', name: '加奈', kind: '固定', hours: 6.5, wage: 2000, transport: 0, cost: 13000 } },
+    { opId: 'a3', table: 'attendance', id: 'a3', data: { bizDate: '2026-11-06', name: 'みか', kind: '手打ち', amount: 8000, cost: 8000 } },
+    { opId: 'e1', table: 'events', id: 'e1', data: { date: '2026-11-05', type: '団体', title: '町内会' } }
+  ];
+  env.call('sync', { mgrToken, ops });
+  assert.equal(env.call('monthly', { month: '2026-11' }).code, 'need_mgr');
+  const r = env.call('monthly', { mgrToken, month: '2026-11' });
+  const m = r.summary;
+  assert.deepEqual([m.sales, m.guests, m.groups, m.cash, m.cashless, m.point], [47500, 11, 3, 42000, 1500, 4000]);
+  assert.deepEqual([m.nomi, m.tanpin, m.event, m.eventGroups], [6000, 1500, 40000, 1]);
+  assert.deepEqual([m.openDays, m.closedDays, m.zeroDays], [3, 1, ['2026-11-07']]);
+  assert.deepEqual(m.purchases, { '飲食物': 5000, '備品': 0, 'その他': 1000 });
+  assert.deepEqual(m.otherNotes, ['花']);
+  assert.deepEqual([m.fixedTotal, m.fixed['家賃']], [100000, 100000]);
+  assert.deepEqual(m.laborFixed, [{ name: '加奈', days: 2, hours: 11.5, transport: 2000, cost: 25000 }]);
+  assert.deepEqual(m.laborOthers, { cost: 8000, count: 1, names: ['みか'] });
+  assert.equal(m.laborTotal, 33000);
+  assert.equal(m.expenses, 5000 + 1000 + 100000 + 33000);
+  assert.equal(m.profitBeforeMgr, 47500 - 139000);
+  assert.equal(m.normalDailyAvg, Math.round((47500 - 40000) / 3));
+  assert.equal(m.laborRate, 69.5);
+  assert.equal(m.costRate, 10.5);
+  assert.equal(m.plannedEvents, 1);
+  assert.equal(r.prev.month, '2026-10');
+  assert.equal(r.prev.sales, 0); // 10月は運用開始日より前（取り込みがまだなので0）
+
+  // スプシの「月次」タブ：固定のスタッフは1人1行、ほかは「人件費（その他）」の1行、仕入れは科目ごと
+  const built = env.call('buildMonthlySheet', { mgrToken });
+  assert.deepEqual(built.months, ['2026-11']);
+  const sh = env.ss.getSheetByName('月次');
+  const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  const row = label => (vals.find(r => r[0] === label) || [])[1];
+  assert.equal(vals[0][1], '2026-11');
+  assert.equal(row('売上'), 47500);
+  assert.equal(row('　加奈'), 25000);
+  assert.equal(row('　人件費（その他）'), 8000);
+  assert.equal(row('　飲食物'), 5000);
+  assert.equal(row('　その他の内容'), '花');
+  assert.equal(row('　家賃'), 100000);
+  assert.equal(row('差し引き（店長報酬前）'), -91500);
+  assert.ok(sh.protection);
+});
+
+test('月次：運用開始日より前の月は「過去の月次」タブ（管理シートの取り込み）から読む', () => {
+  const env = boot();
+  env.setNow('2026-11-30T20:00:00+09:00');
+  const mgrToken = env.login();
+  const sh = env.ss.insertSheet('過去の月次');
+  sh.getRange(1, 1, 6, 3).setNumberFormats(Array.from({ length: 6 }, () => ['@', '@', '@']));
+  sh.getRange(1, 1, 6, 3).setValues([
+    ['項目', '2026-09', '2026-10'], ['売上', 800000, 900000], ['来客数', 250, 280],
+    ['飲食物', 200000, 210000], ['人件費（加奈）', 120000, 130000], ['人件費（その他）', 40000, 30000]
+  ]);
+  const r = env.call('monthly', { mgrToken, month: '2026-10' });
+  assert.equal(r.summary.legacy, true);
+  assert.deepEqual([r.summary.sales, r.summary.guests, r.summary.laborTotal, r.summary.purchases['飲食物']], [900000, 280, 160000, 210000]);
+  assert.equal(r.prev.sales, 800000);
+  const built = env.call('buildMonthlySheet', { mgrToken });
+  assert.deepEqual(built.months, ['2026-09', '2026-10', '2026-11']);
 });

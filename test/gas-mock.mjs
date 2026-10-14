@@ -29,6 +29,7 @@ class Range {
     return this;
   }
   setFontWeight() { return this; }
+  clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sheet.cells.delete(this.sheet._key(this.r + i, this.c + j)); return this; }
 }
 
 class Sheet {
@@ -57,6 +58,9 @@ class Sheet {
     }
   }
   setFrozenRows() {}
+  setFrozenColumns() {}
+  getMaxColumns() { return this.maxCols; }
+  insertColumnsAfter(after, n) { this.maxCols += n; }
   /** 行を消して、下の行を詰める（実物と同じく行数も減る） */
   deleteRows(start, n) {
     const move = (map) => {
@@ -125,7 +129,7 @@ export function loadGas(file) {
       base64Encode: bytes => Buffer.from(bytes.map(b => (b + 256) % 256)).toString('base64'),
       formatDate: (d, tz, fmt) => {
         const iso = jst(d).toISOString();
-        const map = { 'HH:mm:ss': iso.slice(11, 19), 'yyyy-MM-dd': iso.slice(0, 10), "yyyy-MM-dd'T'HH:mm:ssXXX": iso.slice(0, 19) + '+09:00' };
+        const map = { 'HH:mm:ss': iso.slice(11, 19), 'yyyy-MM-dd': iso.slice(0, 10), 'yyyy-MM': iso.slice(0, 7), "yyyy-MM-dd'T'HH:mm:ssXXX": iso.slice(0, 19) + '+09:00' };
         if (!(fmt in map)) throw new Error('まねしていない書式: ' + fmt);
         return map[fmt];
       }

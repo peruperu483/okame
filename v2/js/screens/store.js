@@ -188,7 +188,12 @@ export function renderStore(root, app) {
     const p = panel, b = back, id = st.openId;
     panel = back = null;
     st.openId = st.det = null;
-    const done = () => { p.remove(); b.remove(); };
+    // 閉じかけの卓は触れないようにする。画面が裏に回ると動きが止まることがあるので、動きが終わらなくても消す
+    p.inert = true;
+    p.style.pointerEvents = b.style.pointerEvents = 'none';
+    let removed = false;
+    const done = () => { if (removed) return; removed = true; p.remove(); b.remove(); };
+    setTimeout(done, 300);
     if (reduceMotion()) return done();
     const cardEl = area.querySelector(`.gcard[data-id="${CSS.escape(id)}"]`);
     const from = p.getBoundingClientRect();
@@ -201,10 +206,18 @@ export function renderStore(root, app) {
     b.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, fill: 'forwards' });
   }
 
-  /** 保存（合計と支払い方法ごとの受け取りも一緒に直す） */
+  /** 保存（合計と支払い方法ごとの受け取りも一緒に直す）。計算は端末の最新の行から */
   async function saveVisit(v, patch, log) {
-    const next = { ...v, ...patch };
+    const cur = (await app.store.getRow('visits', v.id)) || v;
+    const next = { ...cur, ...patch };
     await app.sync.save('visits', v.id, { ...patch, total: total(next), ...methodSums(next.pays) }, log ? { log } : {});
+  }
+
+  /** いま開いている卓の最新の行。閉じた卓・退店した組なら null（古い画面からの操作を無視する） */
+  async function liveVisit(v) {
+    if (!panel || !st.det || st.openId !== v.id) return null;
+    const cur = await app.store.getRow('visits', v.id);
+    return cur && cur.status === ST_IN ? cur : null;
   }
 
   function paintDetail() {
@@ -277,12 +290,16 @@ export function renderStore(root, app) {
 
   // --- 追加の操作 ---
   async function addExtra(v, amount) {
+    v = await liveVisit(v);
+    if (!v) return;
     if (!(Number(amount) > 0)) return;
     st.det.addAmt = '';
     await saveVisit(v, { extras: [...(v.extras || []), { id: uuid(), type: EXTRA_ADD, amount: Number(amount), at: nowIso() }] });
   }
 
   async function addCustom(v) {
+    v = await liveVisit(v);
+    if (!v) return;
     const d = st.det, amt = Number(d.addAmt);
     if (!Number.isInteger(amt) || amt <= 0) return;
     if (!d.editId) return addExtra(v, amt);
@@ -294,17 +311,23 @@ export function renderStore(root, app) {
   }
 
   async function delExtra(v, x) {
+    v = await liveVisit(v);
+    if (!v) return;
     if (st.det.editId === x.id) { st.det.editId = null; st.det.addAmt = ''; }
     await saveVisit(v, { extras: (v.extras || []).filter(y => y.id !== x.id) }, { type: x.type === EXTRA_EXT ? '延長を外す' : '追加を消す', reason: '', before: x });
   }
 
   async function addExtension(v, x) {
+    v = await liveVisit(v);
+    if (!v) return;
     await saveVisit(v, { extras: [...(v.extras || []), { id: uuid(), type: EXTRA_EXT, label: x.label, amount: Number(x.price) * Number(v.people), minutes: Number(x.minutes), at: nowIso() }] });
     toast(`${x.label}を足しました`);
   }
 
   // --- 会計の操作 ---
   async function doReceive(v) {
+    v = await liveVisit(v);
+    if (!v) return;
     const d = st.det;
     const r = receive(v, d.method, d.payAmt);
     if (!r.ok) { d.msg = r.error; d.bad = true; return paintDetail(); }
@@ -322,6 +345,8 @@ export function renderStore(root, app) {
   }
 
   async function delPay(v, p) {
+    v = await liveVisit(v);
+    if (!v) return;
     st.det.msg = '';
     await saveVisit(v, { pays: (v.pays || []).filter(x => x.id !== p.id) }, { type: '受け取りを消す', reason: '', before: p });
   }

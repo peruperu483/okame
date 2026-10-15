@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.13.0';
+var APP_VERSION = '0.13.1';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -1930,7 +1930,7 @@ function importLegacy() {
 // 何度実行しても二重にならない：営業日はID＝日付で上書き、イベントはID＝'lg-日付-名前'。管理シートから消えたイベントは削除にする。
 // 取り込んだ営業日の行はメモに印を付け、「テストの行を消す」で消さない
 var LEGACY_PLAN_MARK = '管理シートの予定から';
-var LEGACY_PLAN_SHIFT_COLS = 3; // シフトの欄のうち取り込む列（列2〜列4の3人分。2026-10-16 林の指示。列5は取り込まない）
+var LEGACY_PLAN_SHIFT_COLS = 4; // シフトの欄のうち取り込む列（C〜F の4列すべて。2026-10-16 林の指示）
 
 /** 取り込む（ロックの中で呼ぶ）。件数を返す */
 function importLegacyPlans_(source) {
@@ -1944,7 +1944,7 @@ function importLegacyPlans_(source) {
   eventRows.forEach(function (e) { eventById[String(e.id)] = e; });
   var type = (settings.eventTypes || [])[0] || '団体';
   var dayOps = [], eventOps = [], keep = {}, months = [];
-  var res = { tabs: [], days: 0, people: 0, closedDays: 0, events: 0, removed: 0, skipped: [] };
+  var res = { tabs: [], days: 0, people: 0, closedDays: 0, events: 0, removed: 0 };
   Object.keys(LEGACY_TABS).forEach(function (tab) {
     var month = LEGACY_TABS[tab];
     var sh = source.getSheetByName(tab);
@@ -1957,7 +1957,6 @@ function importLegacyPlans_(source) {
       var closed = cells.indexOf('店休日') >= 0;
       var names = [];
       cells.forEach(function (x) { if (x !== '店休日' && names.indexOf(x) < 0) names.push(x); });
-      d.shiftCells.slice(LEGACY_PLAN_SHIFT_COLS).forEach(function (x) { if (x) res.skipped.push(d.date + ' ' + x); });
       var cur = dayRows[d.date];
       if (names.length || closed || (cur && cur.memo === LEGACY_PLAN_MARK)) {
         dayOps.push({ opId: 'lgp-' + d.date + '-' + now, id: d.date, data: { bizDate: d.date, shiftPlan: names.join('、'), closed: closed, memo: LEGACY_PLAN_MARK, updatedAt: now } });
@@ -2002,7 +2001,6 @@ function importLegacyPlans() {
     return t.error ? t.tab + '：' + t.error
       : t.tab + '：シフトのある日 ' + t.days + '日（うち店休日 ' + t.closedDays + '日）・シフトの人数 のべ' + t.people + '人・イベント ' + t.events + '件';
   }).join('\n') + (r.removed ? '\n管理シートから消えていたイベント：' + r.removed + '件を削除にしました' : '')
-    + (r.skipped.length ? '\n\n列5（4人目の列）は取り込んでいません：' + r.skipped.join('、') : '')
     + '\n\nもう一度実行しても二重にはなりません。');
 }
 

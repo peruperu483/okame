@@ -30,7 +30,7 @@ function source({ sepEvent4 = '6名団体', octShift31 = ['岡本', '加奈', ''
     row(1, '火', ['加奈', '', '', '']),
     row(4, '金', ['岡本', '', '', ''], sepEvent4),
     row(6, '日', ['店休日', '', '', '']),
-    row(18, '金', ['岡本', '加奈', '', '優輝']), // 4人目の列（列5）は取り込まない
+    row(18, '金', ['岡本', '加奈', '', '優輝']), // 4つ目の列（F）も取り込む
     row(23, '水', ['店休日', '', '', ''], 'ユーワード、倫理キックオフ'), // 店休日でもイベントはある
     row(30, '水', ['', '', '', '']), // 空の日
     ['合計']];
@@ -44,17 +44,16 @@ function source({ sepEvent4 = '6名団体', octShift31 = ['岡本', '加奈', ''
 const days = env => Object.fromEntries(env.ss.getSheetByName('営業日').dump().map(r => [String(r['ID']), r]));
 const events = env => env.ss.getSheetByName('予定').dump();
 
-test('管理シートの9月・10月のシフト（3人分の列）とイベントを、アプリの予定に入れる。金額は入れない', () => {
+test('管理シートの9月・10月のシフト（C〜Fの4列すべて）とイベントを、アプリの予定に入れる。金額は入れない', () => {
   const env = boot();
   const r = plain(env.gas.importLegacyPlans_(source()));
   assert.deepEqual(r.tabs, [
-    { tab: '9月', days: 5, people: 4, closedDays: 2, events: 3 },
+    { tab: '9月', days: 5, people: 5, closedDays: 2, events: 3 },
     { tab: '10月', days: 3, people: 7, closedDays: 0, events: 3 }
   ]);
-  assert.deepEqual([r.days, r.people, r.closedDays, r.events, r.removed], [8, 11, 2, 6, 0]);
-  assert.deepEqual(r.skipped, ['2026-09-18 優輝']);
+  assert.deepEqual([r.days, r.people, r.closedDays, r.events, r.removed], [8, 12, 2, 6, 0]);
   const d = days(env);
-  assert.equal(d['2026-09-18']['シフト予定'], '岡本、加奈');
+  assert.equal(d['2026-09-18']['シフト予定'], '岡本、加奈、優輝');
   assert.equal(d['2026-09-06']['店休日'], true);
   assert.equal(d['2026-09-06']['シフト予定'], '');
   assert.equal(d['2026-10-02']['シフト予定'], '岡本、加奈、優輝');

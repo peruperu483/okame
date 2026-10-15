@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.11.1';
+var APP_VERSION = '0.11.2';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -1077,8 +1077,39 @@ function arrangeTabs_(ss, names) {
 
 // ===== 突き合わせ：試運転の日ごとに、アプリの記録と管理シートの数字を並べる =====
 var RECON_SHEET = '突き合わせ';
-var RECON_ITEMS = [['現金売上', 'cash'], ['キャッシュレス', 'cashless'], ['ポイント', 'point'], ['団体（イベント）売上', 'group'],
-  ['人件費', 'labor'], ['仕入れ（食品）', 'food'], ['仕入れ（その他）', 'other']];
+// 元の管理シートのタブの、金額の列すべて（並びも同じ）。あとの3つは、その列から計算する（元の表の下の合計の行にはない）
+var RECON_ITEMS = [['加奈', 'laborKana'], ['スタッフ', 'laborOther'], ['現金売上', 'cash'], ['団体売上', 'group'], ['ポイント売上', 'point'],
+  ['食品支出', 'food'], ['その他支出', 'other'], ['キャッシュレス売上', 'cashless'], ['家賃電気', 'fixed1'],
+  ['ガス・カラオケ・Wi-Fi・電話', 'fixed2'], ['保険', 'fixed3'], ['売上の計', 'sales'], ['支出の計', 'spend'], ['差し引き', 'net']];
+var RECON_FIXED = ['家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険'];
+var RECON_GREEN = '#d9ead3', RECON_RED = '#f4c7c3', RECON_GRAY = '#eeeeee';
+
+/** 売上の計・支出の計・差し引きを足す（元の表もアプリも同じ計算。店長報酬は入れない） */
+function reconTotals_(f, settings) {
+  f.sales = f.cash + f.group + f.cashless + (settings.pointCountsAsSales === false ? 0 : f.point);
+  f.spend = f.laborKana + f.laborOther + f.food + f.other + f.fixed1 + f.fixed2 + f.fixed3;
+  f.net = f.sales - f.spend;
+  return f;
+}
+
+/** 1日（または月）の、すべての項目の比べ方。計の列は、中身に「未入力」があって違うときは、赤にせず灰色にする */
+function reconCompare_(y, x) {
+  var cells = RECON_ITEMS.map(function (it) { return reconCell_(y[it[1]], x[it[1]]); });
+  [[11, [2, 3, 4, 7]], [12, [0, 1, 5, 6, 8, 9, 10]], [13, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]].forEach(function (g) {
+    if (cells[g[0]].kind === 'gap' && g[1].some(function (i) { return cells[i].kind === 'blank'; })) cells[g[0]] = { kind: 'blank', diff: '未入力' };
+  });
+  return cells;
+}
+
+/**
+ * 1つの金額の比べ方。両方0（まだ何も入っていない）は何も塗らない、
+ * 片方だけ0（まだ入れていない。人件費・仕入れは店長があとから入れる）は灰色の「未入力」、両方に数字があって同じなら緑、違えば赤
+ */
+function reconCell_(orig, app) {
+  if (orig === 0 && app === 0) return { kind: 'none' };
+  if (orig === 0 || app === 0) return { kind: 'blank', diff: '未入力' };
+  return orig === app ? { kind: 'same', diff: 0 } : { kind: 'gap', diff: app - orig };
+}
 
 /** 「過去の日別」の行を読む（管理シート側の数字） */
 function readLegacyRows_() {
@@ -1106,7 +1137,9 @@ function appTrialFigures_(settings) {
   var goLive = String(settings.goLiveDate || '');
   var n = function (v) { return Number(v) || 0; };
   var out = {};
-  var at = function (d) { return out[d] = out[d] || { cash: 0, cashless: 0, point: 0, group: 0, labor: 0, food: 0, other: 0 }; };
+  var at = function (d) {
+    return out[d] = out[d] || { laborKana: 0, laborOther: 0, cash: 0, group: 0, point: 0, food: 0, other: 0, cashless: 0, fixed1: 0, fixed2: 0, fixed3: 0 };
+  };
   var trial = function (row, d) { return row.trial === true || (goLive && String(d) < goLive); };
   readTable_(TABLES.visits).rows.forEach(function (v) {
     if (v.status !== '退店' || !v.bizDate || !trial(v, v.bizDate)) return;
@@ -1121,86 +1154,113 @@ function appTrialFigures_(settings) {
   });
   readTable_(TABLES.attendance).rows.forEach(function (a) {
     if (a.status === '削除' || !a.bizDate || !trial(a, a.bizDate)) return;
-    at(a.bizDate).labor += n(a.cost);
+    // 加奈の列と、スタッフの列（月のタブと同じ分け方）
+    if (a.name === '加奈' && a.kind !== '手打ち') at(a.bizDate).laborKana += n(a.cost); else at(a.bizDate).laborOther += n(a.cost);
   });
+  // 固定費は月に1回の入力。元の表と同じく、その月の1日の行に入れる（入れてある月だけ）
+  readTable_(TABLES.fixedCosts).rows.forEach(function (x) {
+    var k = RECON_FIXED.indexOf(x.item);
+    if (x.status === '削除' || !x.month || k < 0 || !trial(x, x.month + '-01')) return;
+    at(x.month + '-01')['fixed' + (k + 1)] += n(x.amount);
+  });
+  Object.keys(out).forEach(function (d) { reconTotals_(out[d], settings); });
   return out;
 }
 
-/** 「突き合わせ」タブを作り直す。ずれのある日が赤く見える */
+/** 「突き合わせ」タブを作り直す。日ごとに「元の表／アプリ／差」を並べる。一致は緑、ずれは赤、片方がまだ空のものは灰色の「未入力」 */
 function buildReconcileSheet_() {
   var settings = getSettings_();
   var ss = SpreadsheetApp.getActive();
   var app = appTrialFigures_(settings);
   var legacy = {};
   readLegacyRows_().forEach(function (d) {
-    legacy[d.date] = { cash: d.cash, cashless: d.cashless, point: d.point, group: d.group, labor: d.laborKana + d.laborOther, food: d.food, other: d.other };
+    legacy[d.date] = reconTotals_({
+      laborKana: d.laborKana, laborOther: d.laborOther, cash: d.cash, group: d.group, point: d.point, food: d.food, other: d.other, cashless: d.cashless,
+      fixed1: d.fixed['家賃電気'] || 0, fixed2: d.fixed['ガス・カラオケ・Wi-Fi・電話'] || 0, fixed3: d.fixed['保険'] || 0
+    }, settings);
   });
   var dates = Object.keys(app).sort();
   var head = ['日付', '曜日', '結果', 'ずれの合計（円）'];
-  RECON_ITEMS.forEach(function (it) { head.push(it[0] + '\nアプリ', it[0] + '\n管理シート', it[0] + '\n差'); });
-  var rows = [], statuses = [], diffCells = [];
-  var tot = RECON_ITEMS.map(function () { return [0, 0, 0]; });
-  var gap = 0, compared = 0;
+  RECON_ITEMS.forEach(function (it) { head.push(it[0] + '\n元の表', it[0] + '\nアプリ', it[0] + '\n差'); });
+  var rows = [], marks = [];
+  var tot = RECON_ITEMS.map(function () { return [0, 0]; });
+  var counts = { gap: 0, blank: 0, same: 0, none: 0, noRow: 0 };
   dates.forEach(function (date, r) {
     var a = app[date], l = legacy[date];
-    var row = [date, dowOf_(date), '', 0];
-    var sumAbs = 0;
+    var row = [date, dowOf_(date), '', ''];
+    var gaps = 0, blanks = 0, sums = 0, sumAbs = 0;
+    var cells = l ? reconCompare_(l, a) : null;
     RECON_ITEMS.forEach(function (it, k) {
       var x = a[it[1]];
-      if (l) {
-        var y = l[it[1]], diff = x - y;
-        row.push(x, y, diff);
-        sumAbs += Math.abs(diff);
-        tot[k][0] += x; tot[k][1] += y; tot[k][2] += diff;
-        if (diff !== 0) diffCells.push([r + 3, 5 + k * 3 + 2]);
-      } else row.push(x, '', '');
+      if (!l) { row.push('', x, ''); return; }
+      var y = l[it[1]], c = cells[k];
+      row.push(y, x, c.kind === 'none' ? 0 : c.diff);
+      tot[k][0] += y; tot[k][1] += x;
+      var col = 5 + k * 3 + 2;
+      if (c.kind === 'gap') { gaps += 1; sumAbs += Math.abs(c.diff); marks.push([r + 3, col, RECON_RED]); }
+      else if (c.kind === 'blank') { blanks += 1; marks.push([r + 3, col, RECON_GRAY]); }
+      else if (c.kind === 'same') { sums += 1; marks.push([r + 3, col, RECON_GREEN]); }
     });
-    if (l) { compared += 1; if (sumAbs) gap += 1; }
-    row[2] = !l ? '管理シートに行なし' : sumAbs ? 'ずれあり' : '一致';
+    var result = !l ? '元の表に行なし' : gaps ? 'ずれあり' : blanks ? '未入力あり' : '一致';
+    row[2] = result;
     row[3] = l ? sumAbs : '';
-    statuses.push(row[2]);
+    marks.push([r + 3, 3, result === '一致' ? RECON_GREEN : result === 'ずれあり' ? RECON_RED : RECON_GRAY]);
+    if (!l) counts.noRow += 1; else if (gaps) counts.gap += 1; else if (blanks) counts.blank += 1; else counts.same += 1;
     rows.push(row);
   });
+  var gap = counts.gap, compared = dates.length - counts.noRow;
   var old = ss.getSheetByName(RECON_SHEET);
   if (old) ss.deleteSheet(old);
   var sh = ss.insertSheet(RECON_SHEET);
   var width = head.length;
   var stamp = nowIso_().slice(0, 16).replace('T', ' ');
   var title = dates.length
-    ? 'ずれのある日：' + gap + '日 ／ 比べた日：' + compared + '日（試運転の記録がある日：' + dates.length + '日）　作成：' + stamp
+    ? 'ずれのある日：' + counts.gap + '日 ／ 未入力のある日：' + counts.blank + '日 ／ 一致した日：' + counts.same + '日 ／ 比べた日：' + compared + '日（試運転の記録がある日：' + dates.length + '日）　作成：' + stamp
     : '試運転の記録がまだありません（運用開始日より前のアプリの記録が、ここに並びます）　作成：' + stamp;
   sh.getRange(1, 1).setValue(title).setFontWeight('bold');
   sh.getRange(2, 1, 1, width).setValues([head]).setBackground(GREEN).setFontColor('#ffffff').setFontWeight('bold')
     .setWrap(true).setHorizontalAlignment('center').setVerticalAlignment('middle');
-  sh.setRowHeight(2, 48);
+  sh.setRowHeight(2, 64);
   if (rows.length) {
     var fmt = head.map(function (h, j) { return j < 3 ? '@' : '#,##0;[Red]-#,##0'; });
     var body = sh.getRange(3, 1, rows.length, width);
     body.setNumberFormats(rows.map(function () { return fmt; }));
     body.setValues(rows);
+    // 月の合計の行（いちばん下）。元の表の行がある日だけを足す。比べ方は日ごとと同じ
     var total = ['合計', '', '', ''];
-    tot.forEach(function (t) { total.push(t[0], t[1], t[2]); });
-    var tr = sh.getRange(3 + rows.length, 1, 1, width);
+    var totRow = rows.length + 3;
+    var totalAbs = 0;
+    var ty = {}, tx = {};
+    RECON_ITEMS.forEach(function (it, k) { ty[it[1]] = tot[k][0]; tx[it[1]] = tot[k][1]; });
+    var tcells = reconCompare_(ty, tx);
+    tot.forEach(function (t, k) {
+      var c = tcells[k];
+      total.push(t[0], t[1], c.kind === 'none' ? 0 : c.diff);
+      var col = 5 + k * 3 + 2;
+      if (c.kind === 'gap') { totalAbs += Math.abs(c.diff); marks.push([totRow, col, RECON_RED]); }
+      else if (c.kind === 'blank') marks.push([totRow, col, RECON_GRAY]);
+      else if (c.kind === 'same') marks.push([totRow, col, RECON_GREEN]);
+    });
+    total[3] = totalAbs;
+    var tr = sh.getRange(totRow, 1, 1, width);
     tr.setNumberFormats([fmt]);
     tr.setValues([total]);
     tr.setFontWeight('bold');
-    statuses.forEach(function (s, r) {
-      sh.getRange(r + 3, 3).setBackground(s === '一致' ? '#d9ead3' : s === 'ずれあり' ? '#f4c7c3' : '#eeeeee');
-    });
-    diffCells.forEach(function (p) { sh.getRange(p[0], p[1]).setBackground('#f4c7c3'); });
+    marks.forEach(function (m) { sh.getRange(m[0], m[1]).setBackground(m[2]); });
+    sh.getRange(3, 5, rows.length + 1, width - 4).setHorizontalAlignment('right');
   }
-  sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 50); sh.setColumnWidth(3, 130); sh.setColumnWidth(4, 100);
-  for (var c = 5; c <= width; c++) sh.setColumnWidth(c, 92);
+  sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 50); sh.setColumnWidth(3, 110); sh.setColumnWidth(4, 100);
+  for (var c = 5; c <= width; c++) sh.setColumnWidth(c, 84);
   sh.setFrozenRows(2);
   sh.setFrozenColumns(2);
   protect_(sh);
-  return { dates: dates.length, compared: compared, gap: gap };
+  return { dates: dates.length, compared: compared, gap: gap, blank: counts.blank };
 }
 
 /** スプシのメニュー */
 function buildReconcile() {
   var r = buildReconcileSheet_();
-  notify_('「' + RECON_SHEET + '」を作り直しました（試運転の記録がある日：' + r.dates + '日、ずれのある日：' + r.gap + '日）。');
+  notify_('「' + RECON_SHEET + '」を作り直しました（試運転の記録がある日：' + r.dates + '日、ずれのある日：' + r.gap + '日、未入力のある日：' + r.blank + '日）。');
 }
 
 /** 運用開始日が月の途中のとき、その月の運用開始日より前の分を、管理シートの数字で足す */

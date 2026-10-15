@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.11.2';
+var APP_VERSION = '0.12.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -201,10 +201,11 @@ function onOpen() {
     .addSeparator()
     .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
-    .addItem('突き合わせを作り直す', 'buildReconcile')
     .addItem('来月のタブを作る', 'createNextMonthTab')
     .addItem('月のタブを作り直す（11月以降）', 'buildAppMonthTabs')
+    .addItem('手打ちのタブを作る', 'createHandTab')
     .addItem('プルダウンの色を月のタブに反映', 'syncPlanColors')
+    .addItem('スプシで打った予定の取り込みを確かめる', 'checkSheetSync')
     .addSeparator()
     .addItem('テストの行を消す', 'deleteTestRows')
     .addItem('共有トークンを作り直す', 'rotateTokenWithConfirm')
@@ -287,11 +288,13 @@ function setup() {
   Object.keys(TABLES).forEach(function (key) { ensureTableSheet_(ss, TABLES[key]); });
   ensureSettingsSheet_(ss);
   var trigMsg = ensureTriggers_();
+  removeOldReconcileTab_(ss);
+  var handMsg = autoHandTab_();
   var blank = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
 
   var props = PropertiesService.getScriptProperties();
-  var lines = ['初期設定が終わりました。', trigMsg];
+  var lines = ['初期設定が終わりました。', trigMsg].concat(handMsg ? [handMsg] : []);
   if (!props.getProperty('SHARED_TOKEN')) {
     props.setProperty('SHARED_TOKEN', newToken_());
     lines.push('共有トークンを作りました。');
@@ -409,6 +412,7 @@ function handle_(body) {
     case 'bootstrap':
       return ok_({ settings: publicSettings_(settings, ctx), mgr: ctx.mgr, version: APP_VERSION, serverTime: nowIso_() });
     case 'fetch':
+      if (body.table === 'days' || body.table === 'events') catchUpOnFetch_(settings); // スプシで打った予定の取りこぼしを拾う（1分に1回まで）
       return ok_({ rows: fetchRows_(body.table, body.from, body.to, ctx) });
     case 'sync':
       return ok_({ results: withLock_(function () { var res = applyOps_(body.ops || [], ctx); rebuildTabsAfterSync_(body.ops); return res; }) });
@@ -873,18 +877,17 @@ function importLegacy_(source, today) {
   });
   protect_(daily);
   protect_(monthly);
-  // 月ごとのタブ（管理シートの9月と同じ形）と、突き合わせ
+  // 月ごとのタブ（管理シートの9月と同じ形）
   var tpl = prepareMonthTemplate_(ss, source.getSheetByName('9月'));
   Object.keys(LEGACY_TABS).forEach(function (tab) {
     if (!parsedByTab[tab]) return;
     writeMonthTab_(ss, tpl, tab, LEGACY_TABS[tab], parsedByTab[tab].days);
   });
-  arrangeTabs_(ss, Object.keys(LEGACY_TABS));
-  var recon = buildReconcileSheet_();
+  removeOldReconcileTab_(ss);
   arrangeTabs_(ss, monthTabNames_(ss, settings));
   hide_(daily); // 普段は見えなくする（アプリの分析が読む。確認したいときは、タブの一覧から表示できる）
   hide_(monthly);
-  result.forEach(function (x) { x.tabs = tpl.how; x.recon = recon; });
+  result.forEach(function (x) { x.tabs = tpl.how; });
   return result;
 }
 
@@ -1075,40 +1078,13 @@ function arrangeTabs_(ss, names) {
   });
 }
 
-// ===== 突き合わせ：試運転の日ごとに、アプリの記録と管理シートの数字を並べる =====
-var RECON_SHEET = '突き合わせ';
-// 元の管理シートのタブの、金額の列すべて（並びも同じ）。あとの3つは、その列から計算する（元の表の下の合計の行にはない）
-var RECON_ITEMS = [['加奈', 'laborKana'], ['スタッフ', 'laborOther'], ['現金売上', 'cash'], ['団体売上', 'group'], ['ポイント売上', 'point'],
-  ['食品支出', 'food'], ['その他支出', 'other'], ['キャッシュレス売上', 'cashless'], ['家賃電気', 'fixed1'],
-  ['ガス・カラオケ・Wi-Fi・電話', 'fixed2'], ['保険', 'fixed3'], ['売上の計', 'sales'], ['支出の計', 'spend'], ['差し引き', 'net']];
-var RECON_FIXED = ['家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険'];
-var RECON_GREEN = '#d9ead3', RECON_RED = '#f4c7c3', RECON_GRAY = '#eeeeee';
+// ===== 突き合わせのタブは、2026-10-16 にやめた（月のタブを「アプリ」と「手打ち」に分け、林が目で比べる）=====
+var OLD_RECON_SHEET = '突き合わせ';
 
-/** 売上の計・支出の計・差し引きを足す（元の表もアプリも同じ計算。店長報酬は入れない） */
-function reconTotals_(f, settings) {
-  f.sales = f.cash + f.group + f.cashless + (settings.pointCountsAsSales === false ? 0 : f.point);
-  f.spend = f.laborKana + f.laborOther + f.food + f.other + f.fixed1 + f.fixed2 + f.fixed3;
-  f.net = f.sales - f.spend;
-  return f;
-}
-
-/** 1日（または月）の、すべての項目の比べ方。計の列は、中身に「未入力」があって違うときは、赤にせず灰色にする */
-function reconCompare_(y, x) {
-  var cells = RECON_ITEMS.map(function (it) { return reconCell_(y[it[1]], x[it[1]]); });
-  [[11, [2, 3, 4, 7]], [12, [0, 1, 5, 6, 8, 9, 10]], [13, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]].forEach(function (g) {
-    if (cells[g[0]].kind === 'gap' && g[1].some(function (i) { return cells[i].kind === 'blank'; })) cells[g[0]] = { kind: 'blank', diff: '未入力' };
-  });
-  return cells;
-}
-
-/**
- * 1つの金額の比べ方。両方0（まだ何も入っていない）は何も塗らない、
- * 片方だけ0（まだ入れていない。人件費・仕入れは店長があとから入れる）は灰色の「未入力」、両方に数字があって同じなら緑、違えば赤
- */
-function reconCell_(orig, app) {
-  if (orig === 0 && app === 0) return { kind: 'none' };
-  if (orig === 0 || app === 0) return { kind: 'blank', diff: '未入力' };
-  return orig === app ? { kind: 'same', diff: 0 } : { kind: 'gap', diff: app - orig };
+/** 前の版で作った「突き合わせ」のタブがあれば消す */
+function removeOldReconcileTab_(ss) {
+  var sh = ss.getSheetByName(OLD_RECON_SHEET);
+  if (sh) ss.deleteSheet(sh);
 }
 
 /** 「過去の日別」の行を読む（管理シート側の数字） */
@@ -1130,137 +1106,6 @@ function readLegacyRows_() {
       fixed: { '家賃電気': n(r, '家賃電気'), 'ガス・カラオケ・Wi-Fi・電話': n(r, 'ガス・カラオケ・Wi-Fi・電話'), '保険': n(r, '保険') }
     };
   }).filter(function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d.date); });
-}
-
-/** 試運転の日ごとの、アプリ側の数字（運用開始日より前、または試運転の印のある記録） */
-function appTrialFigures_(settings) {
-  var goLive = String(settings.goLiveDate || '');
-  var n = function (v) { return Number(v) || 0; };
-  var out = {};
-  var at = function (d) {
-    return out[d] = out[d] || { laborKana: 0, laborOther: 0, cash: 0, group: 0, point: 0, food: 0, other: 0, cashless: 0, fixed1: 0, fixed2: 0, fixed3: 0 };
-  };
-  var trial = function (row, d) { return row.trial === true || (goLive && String(d) < goLive); };
-  readTable_(TABLES.visits).rows.forEach(function (v) {
-    if (v.status !== '退店' || !v.bizDate || !trial(v, v.bizDate)) return;
-    var f = at(v.bizDate);
-    if (v.kind === 'イベント') f.group += n(v.total) - (settings.pointCountsAsSales === false ? n(v.point) : 0);
-    else { f.cash += n(v.cash); f.cashless += n(v.cashless); f.point += n(v.point); }
-  });
-  readTable_(TABLES.closings).rows.forEach(function (c) { if (c.bizDate && trial(c, c.bizDate)) at(c.bizDate); });
-  readTable_(TABLES.purchases).rows.forEach(function (p) {
-    if (p.status === '削除' || !p.date || !trial(p, p.date)) return;
-    at(p.date)[p.category === '飲食物' ? 'food' : 'other'] += n(p.amount);
-  });
-  readTable_(TABLES.attendance).rows.forEach(function (a) {
-    if (a.status === '削除' || !a.bizDate || !trial(a, a.bizDate)) return;
-    // 加奈の列と、スタッフの列（月のタブと同じ分け方）
-    if (a.name === '加奈' && a.kind !== '手打ち') at(a.bizDate).laborKana += n(a.cost); else at(a.bizDate).laborOther += n(a.cost);
-  });
-  // 固定費は月に1回の入力。元の表と同じく、その月の1日の行に入れる（入れてある月だけ）
-  readTable_(TABLES.fixedCosts).rows.forEach(function (x) {
-    var k = RECON_FIXED.indexOf(x.item);
-    if (x.status === '削除' || !x.month || k < 0 || !trial(x, x.month + '-01')) return;
-    at(x.month + '-01')['fixed' + (k + 1)] += n(x.amount);
-  });
-  Object.keys(out).forEach(function (d) { reconTotals_(out[d], settings); });
-  return out;
-}
-
-/** 「突き合わせ」タブを作り直す。日ごとに「元の表／アプリ／差」を並べる。一致は緑、ずれは赤、片方がまだ空のものは灰色の「未入力」 */
-function buildReconcileSheet_() {
-  var settings = getSettings_();
-  var ss = SpreadsheetApp.getActive();
-  var app = appTrialFigures_(settings);
-  var legacy = {};
-  readLegacyRows_().forEach(function (d) {
-    legacy[d.date] = reconTotals_({
-      laborKana: d.laborKana, laborOther: d.laborOther, cash: d.cash, group: d.group, point: d.point, food: d.food, other: d.other, cashless: d.cashless,
-      fixed1: d.fixed['家賃電気'] || 0, fixed2: d.fixed['ガス・カラオケ・Wi-Fi・電話'] || 0, fixed3: d.fixed['保険'] || 0
-    }, settings);
-  });
-  var dates = Object.keys(app).sort();
-  var head = ['日付', '曜日', '結果', 'ずれの合計（円）'];
-  RECON_ITEMS.forEach(function (it) { head.push(it[0] + '\n元の表', it[0] + '\nアプリ', it[0] + '\n差'); });
-  var rows = [], marks = [];
-  var tot = RECON_ITEMS.map(function () { return [0, 0]; });
-  var counts = { gap: 0, blank: 0, same: 0, none: 0, noRow: 0 };
-  dates.forEach(function (date, r) {
-    var a = app[date], l = legacy[date];
-    var row = [date, dowOf_(date), '', ''];
-    var gaps = 0, blanks = 0, sums = 0, sumAbs = 0;
-    var cells = l ? reconCompare_(l, a) : null;
-    RECON_ITEMS.forEach(function (it, k) {
-      var x = a[it[1]];
-      if (!l) { row.push('', x, ''); return; }
-      var y = l[it[1]], c = cells[k];
-      row.push(y, x, c.kind === 'none' ? 0 : c.diff);
-      tot[k][0] += y; tot[k][1] += x;
-      var col = 5 + k * 3 + 2;
-      if (c.kind === 'gap') { gaps += 1; sumAbs += Math.abs(c.diff); marks.push([r + 3, col, RECON_RED]); }
-      else if (c.kind === 'blank') { blanks += 1; marks.push([r + 3, col, RECON_GRAY]); }
-      else if (c.kind === 'same') { sums += 1; marks.push([r + 3, col, RECON_GREEN]); }
-    });
-    var result = !l ? '元の表に行なし' : gaps ? 'ずれあり' : blanks ? '未入力あり' : '一致';
-    row[2] = result;
-    row[3] = l ? sumAbs : '';
-    marks.push([r + 3, 3, result === '一致' ? RECON_GREEN : result === 'ずれあり' ? RECON_RED : RECON_GRAY]);
-    if (!l) counts.noRow += 1; else if (gaps) counts.gap += 1; else if (blanks) counts.blank += 1; else counts.same += 1;
-    rows.push(row);
-  });
-  var gap = counts.gap, compared = dates.length - counts.noRow;
-  var old = ss.getSheetByName(RECON_SHEET);
-  if (old) ss.deleteSheet(old);
-  var sh = ss.insertSheet(RECON_SHEET);
-  var width = head.length;
-  var stamp = nowIso_().slice(0, 16).replace('T', ' ');
-  var title = dates.length
-    ? 'ずれのある日：' + counts.gap + '日 ／ 未入力のある日：' + counts.blank + '日 ／ 一致した日：' + counts.same + '日 ／ 比べた日：' + compared + '日（試運転の記録がある日：' + dates.length + '日）　作成：' + stamp
-    : '試運転の記録がまだありません（運用開始日より前のアプリの記録が、ここに並びます）　作成：' + stamp;
-  sh.getRange(1, 1).setValue(title).setFontWeight('bold');
-  sh.getRange(2, 1, 1, width).setValues([head]).setBackground(GREEN).setFontColor('#ffffff').setFontWeight('bold')
-    .setWrap(true).setHorizontalAlignment('center').setVerticalAlignment('middle');
-  sh.setRowHeight(2, 64);
-  if (rows.length) {
-    var fmt = head.map(function (h, j) { return j < 3 ? '@' : '#,##0;[Red]-#,##0'; });
-    var body = sh.getRange(3, 1, rows.length, width);
-    body.setNumberFormats(rows.map(function () { return fmt; }));
-    body.setValues(rows);
-    // 月の合計の行（いちばん下）。元の表の行がある日だけを足す。比べ方は日ごとと同じ
-    var total = ['合計', '', '', ''];
-    var totRow = rows.length + 3;
-    var totalAbs = 0;
-    var ty = {}, tx = {};
-    RECON_ITEMS.forEach(function (it, k) { ty[it[1]] = tot[k][0]; tx[it[1]] = tot[k][1]; });
-    var tcells = reconCompare_(ty, tx);
-    tot.forEach(function (t, k) {
-      var c = tcells[k];
-      total.push(t[0], t[1], c.kind === 'none' ? 0 : c.diff);
-      var col = 5 + k * 3 + 2;
-      if (c.kind === 'gap') { totalAbs += Math.abs(c.diff); marks.push([totRow, col, RECON_RED]); }
-      else if (c.kind === 'blank') marks.push([totRow, col, RECON_GRAY]);
-      else if (c.kind === 'same') marks.push([totRow, col, RECON_GREEN]);
-    });
-    total[3] = totalAbs;
-    var tr = sh.getRange(totRow, 1, 1, width);
-    tr.setNumberFormats([fmt]);
-    tr.setValues([total]);
-    tr.setFontWeight('bold');
-    marks.forEach(function (m) { sh.getRange(m[0], m[1]).setBackground(m[2]); });
-    sh.getRange(3, 5, rows.length + 1, width - 4).setHorizontalAlignment('right');
-  }
-  sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 50); sh.setColumnWidth(3, 110); sh.setColumnWidth(4, 100);
-  for (var c = 5; c <= width; c++) sh.setColumnWidth(c, 84);
-  sh.setFrozenRows(2);
-  sh.setFrozenColumns(2);
-  protect_(sh);
-  return { dates: dates.length, compared: compared, gap: gap, blank: counts.blank };
-}
-
-/** スプシのメニュー */
-function buildReconcile() {
-  var r = buildReconcileSheet_();
-  notify_('「' + RECON_SHEET + '」を作り直しました（試運転の記録がある日：' + r.dates + '日、ずれのある日：' + r.gap + '日、未入力のある日：' + r.blank + '日）。');
 }
 
 /** 運用開始日が月の途中のとき、その月の運用開始日より前の分を、管理シートの数字で足す */
@@ -1322,11 +1167,114 @@ function planMonths_(settings) {
   return months;
 }
 
-/** 下のタブの並び：9月・10月・（11月以降）・突き合わせ */
+var APP_TAB_SUFFIX = '（アプリ）';
+var HAND_TAB_SUFFIX = '（手打ち）';
+
+/** その月の、アプリの記録が入るタブ（「11月（アプリ）」か「11月」）。なければ null */
+function appTab_(ss, month) {
+  return ss.getSheetByName(monthTabLabel_(month) + APP_TAB_SUFFIX) || ss.getSheetByName(monthTabLabel_(month));
+}
+
+/** アプリのタブの名前。手打ちのタブがある月は「11月（アプリ）」、ない月は「12月」 */
+function appTabName_(ss, month) {
+  var sh = appTab_(ss, month);
+  if (sh) return sh.getName();
+  return monthTabLabel_(month) + (ss.getSheetByName(monthTabLabel_(month) + HAND_TAB_SUFFIX) ? APP_TAB_SUFFIX : '');
+}
+
+/** タブの名前から、アプリのタブの月を探す（手打ちのタブ・ほかのタブは null） */
+function monthOfAppTab_(name, settings) {
+  var month = null;
+  planMonths_(settings).forEach(function (m) { if (name === monthTabLabel_(m) || name === monthTabLabel_(m) + APP_TAB_SUFFIX) month = m; });
+  return month;
+}
+
+/** 下のタブの並び：9月・10月・11月（アプリ）・11月（手打ち）・12月… */
 function monthTabNames_(ss, settings) {
   var names = Object.keys(LEGACY_TABS);
-  planMonths_(settings).forEach(function (m) { var l = monthTabLabel_(m); if (ss.getSheetByName(l)) names.push(l); });
-  return names.concat([RECON_SHEET]);
+  planMonths_(settings).forEach(function (m) {
+    var app = appTab_(ss, m), hand = ss.getSheetByName(monthTabLabel_(m) + HAND_TAB_SUFFIX);
+    if (app) names.push(app.getName());
+    if (hand) names.push(hand.getName());
+  });
+  return names;
+}
+
+// ===== 手打ちのタブ（試運転のあいだ、店長が今までどおり管理シートの形で打つ）=====
+// 見た目と列は管理シートの9月と同じ（月のひな形をコピー）。日付と曜日だけ入れ、ほかは空。保護しない。
+// アプリ（GAS）は、作ったあと一切書き込まない。一番下に「アプリとの差」の行（月の合計どうしの差。式なので自動で変わる。色なし）
+var HAND_DIFF_ROW = MONTH_ROWS + 3; // 34行目（33行目は合計）
+
+/** 手打ちのタブを作る。作ったら名前、もうあれば null */
+function createHandTab_(month) {
+  var ss = SpreadsheetApp.getActive();
+  var base = monthTabLabel_(month);
+  var name = base + HAND_TAB_SUFFIX;
+  if (ss.getSheetByName(name)) return null;
+  var app = ss.getSheetByName(base);
+  if (app) app.setName(base + APP_TAB_SUFFIX); // 隣のアプリのタブは「11月（アプリ）」に
+  if (app && String(app.getRange(1, 1).getValue()) === base) app.getRange(1, 1).setValue(base + APP_TAB_SUFFIX);
+  var tpl = getMonthTemplate_(ss);
+  var sh = tpl.sheet.copyTo(ss);
+  sh.setName(name);
+  try { sh.showSheet(); } catch (e) { /* もとから見えている */ }
+  try { sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (pr) { pr.remove(); }); } catch (e) { /* 保護がなければ何もしない */ }
+  var n = daysInMonth_(month), dates = [];
+  for (var i = 0; i < MONTH_ROWS; i++) dates.push(i < n ? [i + 1, dowOf_(month + '-' + pad2_(i + 1))] : ['', '']);
+  sh.getRange(1, 1).setValue(base + HAND_TAB_SUFFIX);
+  sh.getRange(2, 1, MONTH_ROWS, 2).setValues(dates);
+  // アプリとの差（アプリ − 手打ち）。手打ちの H〜R は、アプリのタブの I〜S（アプリのタブは「見込み」の列が1つ多い）
+  var appName = base + APP_TAB_SUFFIX, total = MONTH_ROWS + 2;
+  var hand = 'HIJKLMNOPQR'.split(''), appCols = 'IJKLMNOPQRS'.split('');
+  sh.getRange(HAND_DIFF_ROW, 1).setValue('アプリとの差（アプリ − 手打ち）').setFontWeight('bold');
+  sh.getRange(HAND_DIFF_ROW, 8, 1, 11).setFormulas([hand.map(function (c, k) {
+    return '=IFERROR(INDIRECT("\'' + appName + '\'!' + appCols[k] + total + '")-' + c + total + ',"")';
+  })]).setNumberFormat(YEN_FORMAT).setFontWeight('bold');
+  arrangeTabs_(ss, monthTabNames_(ss, getSettings_()));
+  return name;
+}
+
+/** 初期設定：運用開始の月の手打ちのタブを、1回だけ作る（消したあとに初期設定をしても、作り直さない） */
+function autoHandTab_() {
+  var settings = getSettings_();
+  var goLive = String(settings.goLiveDate || '');
+  if (!/^\d{4}-\d{2}/.test(goLive)) return '';
+  var month = goLive.slice(0, 7);
+  var key = 'HANDTAB_AUTO:' + month;
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty(key) || Object.keys(LEGACY_TABS).some(function (k) { return LEGACY_TABS[k] === month; })) return '';
+  var name = createHandTab_(month);
+  props.setProperty(key, '1');
+  return name ? '「' + name + '」のタブを作りました（店長が管理シートと同じ形で打つタブ。保護なし）。' : '';
+}
+
+/** 「12月」「2027-01」「2027年1月」「12」などを、月（YYYY-MM）にする。年がなければ、今月以降で一番近い月 */
+function parseMonthInput_(text, nowMonth) {
+  var t = String(text || '').replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); }).replace(/\s/g, '');
+  var m = t.match(/^(\d{4})[-\/年](\d{1,2})月?$/);
+  if (m) return m[1] + '-' + pad2_(Number(m[2]));
+  m = t.match(/^(\d{1,2})月?$/);
+  if (!m || Number(m[1]) < 1 || Number(m[1]) > 12) return null;
+  var y = Number(nowMonth.slice(0, 4)), mm = Number(m[1]);
+  if (mm < Number(nowMonth.slice(5, 7))) y += 1;
+  return y + '-' + pad2_(mm);
+}
+
+/** スプシのメニュー：手打ちのタブを作る（月を聞く） */
+function createHandTab() {
+  var ui = SpreadsheetApp.getUi();
+  var r = ui.prompt('手打ちのタブを作る', 'どの月ですか？（例：12月、2027-01）\n管理シートと同じ形の空のタブを、その月のアプリのタブの隣に作ります。', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var settings = getSettings_();
+  var month = parseMonthInput_(r.getResponseText(), Utilities.formatDate(now_(), TZ, 'yyyy-MM'));
+  if (!month) { ui.alert('月が読めませんでした（例：12月、2027-01）。'); return; }
+  var goLive = String(settings.goLiveDate || '');
+  if (Object.keys(LEGACY_TABS).some(function (k) { return LEGACY_TABS[k] === month; }) || (goLive && month < goLive.slice(0, 7))) {
+    ui.alert(month + ' は、管理シートから取り込む月（または運用開始日より前の月）なので作りません。'); return;
+  }
+  var name = withLock_(function () { return createHandTab_(month); });
+  ui.alert(name ? '「' + name + '」を作りました。保護はかけていないので、店長が全部手で打てます。アプリからは書き込みません。一番下の「アプリとの差」は、月の合計どうしの差です。'
+    : '「' + monthTabLabel_(month) + HAND_TAB_SUFFIX + '」は、もうあります。');
 }
 
 /** 月のタブの元になる見た目。なければ（取り込みの前でも）自前で作る */
@@ -1538,8 +1486,8 @@ function ingestSheetPlanEdits_(month, sh, settings) {
 function rebuildAppMonthTab_(month) {
   var settings = getSettings_();
   var ss = SpreadsheetApp.getActive();
-  var label = monthTabLabel_(month);
-  var old = ss.getSheetByName(label);
+  var label = appTabName_(ss, month);
+  var old = appTab_(ss, month);
   var existed = !!old;
   if (old) ingestSheetPlanEdits_(month, old, settings); // スプシで打って、まだアプリに入っていないものを、書き換える前に取り込む
   var tpl = getPlanTemplate_(ss);
@@ -1553,7 +1501,7 @@ function rebuildAppMonthTab_(month) {
 /** シフト・ラスト・店休日・イベント・見込みの列だけ、アプリの内容に書き換える（アプリの予定を直したとき。金額は触らない） */
 function refreshPlanColumns_(month) {
   var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(monthTabLabel_(month));
+  var sh = appTab_(ss, month);
   if (!sh) return false;
   if (String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') { rebuildAppMonthTab_(month); return true; } // 古い形のタブは作り直す
   var settings = getSettings_();
@@ -1580,7 +1528,7 @@ function buildAppMonthTabs() {
   var settings = getSettings_();
   var ss = SpreadsheetApp.getActive();
   var active = appMonths_(settings);
-  var months = planMonths_(settings).filter(function (m) { return active.indexOf(m) >= 0 || ss.getSheetByName(monthTabLabel_(m)); });
+  var months = planMonths_(settings).filter(function (m) { return active.indexOf(m) >= 0 || appTab_(ss, m); });
   if (!months.length) { notify_('運用開始日（' + settings.goLiveDate + '）になる前なので、アプリの記録から作る月のタブはまだありません。'); return; }
   var labels = withLock_(function () { return months.map(rebuildAppMonthTab_); });
   notify_('月のタブを作り直しました（' + labels.join('・') + '）。');
@@ -1704,7 +1652,7 @@ function syncPlanColors() {
   if (!tpl) { notify_('「' + PLAN_TPL_SHEET + '」がまだありません。先に「来月のタブを作る」を実行してください。'); return; }
   var labels = [];
   planMonths_(getSettings_()).forEach(function (m) {
-    var sh = ss.getSheetByName(monthTabLabel_(m));
+    var sh = appTab_(ss, m);
     if (sh) { copyValidationsFromTemplate_(sh, tpl); labels.push(sh.getName()); }
   });
   notify_(labels.length ? 'プルダウンの色を写しました（' + labels.join('・') + '）。' : '写すタブがありません（11月以降のタブは、まだありません）。');
@@ -1726,11 +1674,11 @@ function handleSheetEdit(e) {
   try {
     if (!e || !e.range) return;
     var sh = e.range.getSheet();
+    if (!/月/.test(sh.getName()) || sh.getName().indexOf(HAND_TAB_SUFFIX) >= 0) return; // 月のタブ以外・手打ちのタブは見ない
     var settings = getSettings_();
-    var month = null;
-    planMonths_(settings).forEach(function (m) { if (monthTabLabel_(m) === sh.getName()) month = m; });
+    var month = monthOfAppTab_(sh.getName(), settings);
     if (!month) return;
-    if (String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') return; // 古い形のタブは、作り直すまで何もしない
+    if (String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') { noteSheetEdit_(sh, e.range, '古い形のタブなので、取り込みませんでした'); return; } // 古い形のタブは、作り直すまで何もしない
     var r1 = e.range.getRow(), r2 = r1 + e.range.getNumRows() - 1;
     var c1 = e.range.getColumn(), c2 = c1 + e.range.getNumColumns() - 1;
     var hit = function (a, b) { return c1 <= b && c2 >= a; };
@@ -1742,9 +1690,69 @@ function handleSheetEdit(e) {
       pushPlanFromSheet_(sh, month, from, to, what, settings);
       updatePlanSnapshotCells_(month, sh, from, to, what);
     });
+    noteSheetEdit_(sh, e.range, 'アプリに入れました');
   } catch (err) {
     console.error('スプシの編集をアプリに入れられませんでした：' + err.message);
+    try { noteSheetEdit_(e.range.getSheet(), e.range, '失敗：' + err.message); } catch (e2) { /* 記録できなくても先へ */ }
   }
+}
+
+/** 編集のトリガーが動いた記録（最後の1回だけ）。メニュー「スプシで打った予定の取り込みを確かめる」で見る */
+function noteSheetEdit_(sh, range, result) {
+  var a1 = '';
+  try { a1 = range.getA1Notation(); } catch (e) { a1 = range.getRow() + '行' + range.getColumn() + '列'; }
+  PropertiesService.getScriptProperties().setProperty('SHEET_EDIT_LAST', JSON.stringify({ at: nowIso_(), sheet: sh.getName(), range: a1, result: result }));
+}
+
+/**
+ * 編集のトリガーが動かなかった（入っていない・時間切れ・ロック待ち）ときの取りこぼしを拾う：
+ * 月のタブの、覚えている内容と違うセルをアプリへ入れ、覚えている内容を新しくする。
+ * アプリが営業日・予定を読むとき（1分に1回まで）と、メニューから呼ぶ。入れた行の数を返す
+ */
+function catchUpSheetEdits_(settings, force) {
+  var cache = CacheService.getScriptCache();
+  if (!force && cache.get('sheetCatchUp')) return 0;
+  cache.put('sheetCatchUp', '1', 60);
+  var ss = SpreadsheetApp.getActive(), count = 0;
+  planMonths_(settings).forEach(function (m) {
+    var sh = appTab_(ss, m);
+    if (!sh || String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') return;
+    if (!readPlanSnapshot_(m)) { savePlanSnapshot_(m, sh); return; } // 覚えていない（前の版で作ったタブ）：今の内容を覚えるだけ
+    var n = ingestSheetPlanEdits_(m, sh, settings);
+    if (n) savePlanSnapshot_(m, sh);
+    count += n;
+  });
+  return count;
+}
+
+/** 読み込みのついでに拾う（ロックが取れなければ、次の機会に。読み込みは止めない） */
+function catchUpOnFetch_(settings) {
+  try {
+    if (CacheService.getScriptCache().get('sheetCatchUp')) return;
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(3000)) return;
+    try { catchUpSheetEdits_(settings, false); } finally { lock.releaseLock(); }
+  } catch (e) {
+    console.error('スプシで打った予定を拾えませんでした：' + e.message);
+  }
+}
+
+/** スプシのメニュー：編集のトリガーがあるか・最後に動いたときの結果を見せ、なければ作り、取りこぼしをアプリへ入れる */
+function checkSheetSync() {
+  var lines = [];
+  var has = false;
+  try { has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'handleSheetEdit'; }); } catch (e) { lines.push('トリガーを読めませんでした：' + e.message); }
+  lines.push(has ? '編集のトリガー：あります。' : '編集のトリガー：ありませんでした。');
+  if (!has) lines.push(ensureTriggers_());
+  var last = PropertiesService.getScriptProperties().getProperty('SHEET_EDIT_LAST');
+  if (last) {
+    var l = JSON.parse(last);
+    lines.push('最後に動いたとき：' + String(l.at).slice(0, 16).replace('T', ' ') + '　' + l.sheet + ' ' + l.range + '　' + l.result);
+  } else lines.push('最後に動いたとき：まだ記録がありません（この版を貼ってから、トリガーが1回も動いていません）。');
+  var n = withLock_(function () { return catchUpSheetEdits_(getSettings_(), true); });
+  lines.push(n ? 'まだアプリに入っていなかった打ち込み：' + n + '行を、いまアプリに入れました。' : 'まだアプリに入っていない打ち込みは、ありませんでした。');
+  lines.push('\n確かめ方：月のタブ（アプリ）のシフトの欄を1つ打ち、もう一度このメニューを開くと、「最後に動いたとき」がその欄になります。');
+  notify_(lines.join('\n'));
 }
 
 function pushPlanFromSheet_(sh, month, rowFrom, rowTo, what, settings) {
@@ -1880,7 +1888,7 @@ function rebuildTabsAfterSync_(ops) {
       (kind === 'full' ? full : light)[m] = true;
     });
     Object.keys(full).forEach(function (m) { rebuildAppMonthTab_(m); });
-    Object.keys(light).forEach(function (m) { if (!full[m] && ss.getSheetByName(monthTabLabel_(m))) refreshPlanColumns_(m); });
+    Object.keys(light).forEach(function (m) { if (!full[m] && appTab_(ss, m)) refreshPlanColumns_(m); });
   } catch (e) {
     console.error('月のタブを書き換えられませんでした：' + e.message);
   }
@@ -1906,7 +1914,7 @@ function importLegacy() {
     if (x.error) return x.tab + '：' + x.error;
     return x.tab + '：' + x.days + '日分（' + x.until + '）・売上 ' + Number(x.sales).toLocaleString() + '円' + (x.unknown.length ? '\n　読めなかった列：' + x.unknown.join('、') : '');
   }).join('\n') + '\n\n月のタブ（9月・10月）を' + (res[0] && res[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。'
-    + (res[0] && res[0].recon ? '\n突き合わせ：試運転の記録がある日 ' + res[0].recon.dates + '日・ずれのある日 ' + res[0].recon.gap + '日' : '') + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
+    + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
 }
 
 // ===== 月次 =====

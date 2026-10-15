@@ -1,4 +1,4 @@
-// 月ごとのタブ（9月・10月）・突き合わせ・運用開始日が月の途中のとき
+// 月ごとのタブ（9月・10月）・運用開始日が月の途中のとき
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
@@ -54,8 +54,9 @@ test('月のタブ：9月・10月が管理シートの9月と同じ形で先頭�
   const res = plain(env.gas.importLegacy_(source(), '2026-10-14'));
   assert.equal(res[0].tabs, 'copy');
   const names = env.sheets.map(s => s.name);
-  assert.deepEqual(names.slice(0, 3), ['9月', '10月', '突き合わせ']);
-  for (const n of ['9月', '10月', '月のひな形', '突き合わせ']) assert.equal(names.filter(x => x === n).length, 1, n);
+  assert.deepEqual(names.slice(0, 2), ['9月', '10月']);
+  assert.ok(!names.includes('突き合わせ')); // 突き合わせのタブは、やめた
+  for (const n of ['9月', '10月', '月のひな形']) assert.equal(names.filter(x => x === n).length, 1, n);
   assert.ok(!names.some(n => n.includes('のコピー')));
   assert.ok(env.ss.getSheetByName('過去の日別').hidden && env.ss.getSheetByName('過去の月次').hidden && env.ss.getSheetByName('月のひな形').hidden);
   assert.ok(!env.ss.getSheetByName('9月').hidden && !env.ss.getSheetByName('10月').hidden);
@@ -90,7 +91,7 @@ test('月のタブ：9月・10月が管理シートの9月と同じ形で先頭�
   assert.equal(bg('10月', 3, 3), '#ffff00');
   assert.equal(bg('10月', 11, 7), '#ffff00'); // 10日の「1日ママ」
   assert.equal(bg('10月', 15, 3), undefined); // 14日の行の1行おきの色は写さない
-  for (const n of ['9月', '10月', '突き合わせ', '月のひな形']) assert.ok(env.ss.getSheetByName(n).protection, n + 'の保護');
+  for (const n of ['9月', '10月', '月のひな形']) assert.ok(env.ss.getSheetByName(n).protection, n + 'の保護');
   assert.ok(env.ss.getSheetByName('10月').bandings.length >= 1);
   assert.equal(env.ss.getSheetByName('過去の日別').dump().length, 4 + 4); // 取り込みの数字は二重にならない
 });
@@ -102,7 +103,7 @@ test('月のタブ：見本をコピーできなくても、同じ並びで自�
   const res = plain(env.gas.importLegacy_(src, '2026-10-14'));
   assert.equal(res[0].tabs, 'plain');
   const names = env.sheets.map(s => s.name);
-  assert.deepEqual(names.slice(0, 3), ['9月', '10月', '突き合わせ']);
+  assert.deepEqual(names.slice(0, 2), ['9月', '10月']);
   assert.ok(!names.some(n => n.includes('のコピー')));
   const sh = env.ss.getSheetByName('9月');
   const v = sh.getRange(1, 1, 33, 18).getValues();
@@ -113,104 +114,6 @@ test('月のタブ：見本をコピーできなくても、同じ並びで自�
   assert.ok(sh.bgs.get('3:3')); // チップの代わりの色
   assert.ok(sh.bgs.get('2:2')); // 曜日
   assert.equal(env.ss.getSheetByName('10月').bgs.get('3:3'), '#ffff00'); // 黄色はそのまま
-});
-
-test('突き合わせ：元の表の列すべてを、日ごとに「元の表／アプリ／差」で並べる。一致は緑・ずれは赤・片方が空は灰色の「未入力」', () => {
-  const { env, source } = legacyEnv();
-  const mgrToken = env.login();
-  const sync = (table, id, data) => env.call('sync', { mgrToken, ops: [{ opId: 'o-' + id, table, id, data }] });
-  // 10/01：元の表は 食品500・その他100・家賃電気250000・ガス30000・保険8000。アプリは家賃電気だけ入れてある
-  sync('fixedCosts', 'f1', { month: '2026-10', item: '家賃電気', amount: 250000, status: '有効' });
-  // 10/02：現金・キャッシュレス・食品・加奈は元の表と同じ。ガス4900（元の表の10/02の行）はアプリにまだない
-  sync('visits', 'v1', { bizDate: '2026-10-02', no: 1, people: 4, kind: '飲み放題', status: '退店', total: 105000, cash: 100000, cashless: 5000, point: 0 });
-  sync('purchases', 'p1', { date: '2026-10-02', category: '飲食物', amount: 800, status: '有効' });
-  sync('attendance', 'a1', { bizDate: '2026-10-02', name: '加奈', kind: '固定', hours: 6, cost: 15000, status: '有効' });
-  // 10/10：現金が3000多い（ずれ）。イベントは元の表の団体売上が0、人件費・食品はアプリに入っていない（未入力）
-  sync('visits', 'v2', { bizDate: '2026-10-10', no: 1, people: 2, kind: '飲み放題', status: '退店', total: 28000, cash: 28000 });
-  sync('visits', 'v3', { bizDate: '2026-10-10', no: 2, people: 10, kind: 'イベント', status: '退店', total: 50000, cash: 50000 });
-  sync('visits', 'v4', { bizDate: '2026-10-10', no: 3, people: 1, kind: '単品', status: '店内', total: 0 }); // 店内：数えない
-  // 10/14：すべて一致（現金25000だけ）
-  sync('visits', 'v7', { bizDate: '2026-10-14', no: 1, people: 1, kind: '飲み放題', status: '退店', total: 25000, cash: 25000 });
-  // 10/15：元の表に行がない日
-  sync('visits', 'v5', { bizDate: '2026-10-15', no: 1, people: 1, kind: '単品', status: '退店', total: 1000, cash: 1000 });
-  // 運用開始日以降（11/02）は試運転ではない
-  sync('visits', 'v6', { bizDate: '2026-11-02', no: 1, people: 1, kind: '単品', status: '退店', total: 500, cash: 500 });
-  env.gas.importLegacy_(source(), '2026-10-14');
-
-  const sh = env.ss.getSheetByName('突き合わせ');
-  const rows = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
-  assert.match(rows[0][0], /ずれのある日：1日 ／ 未入力のある日：2日 ／ 一致した日：1日 ／ 比べた日：4日/);
-  // 見出し：元の管理シートの列と同じ並び（元の表・アプリ・差）
-  const names = ['加奈', 'スタッフ', '現金売上', '団体売上', 'ポイント売上', '食品支出', 'その他支出', 'キャッシュレス売上', '家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険', '売上の計', '支出の計', '差し引き'];
-  assert.deepEqual(rows[1].slice(4), names.flatMap(n => [n + '\n元の表', n + '\nアプリ', n + '\n差']));
-  const byDate = Object.fromEntries(rows.slice(2).map(r => [r[0], r]));
-  assert.deepEqual(Object.keys(byDate), ['2026-10-01', '2026-10-02', '2026-10-10', '2026-10-14', '2026-10-15', '合計']);
-  const col = (r, name) => { const k = names.indexOf(name); return r.slice(4 + k * 3, 7 + k * 3); }; // [元の表, アプリ, 差]
-  const rowNo = d => 3 + Object.keys(byDate).indexOf(d);
-  const bg = (d, name) => sh.bgs.get(rowNo(d) + ':' + (7 + names.indexOf(name) * 3));
-
-  // 10/01：家賃電気は一致（緑）。食品・その他・ガス・保険は、アプリが空なので未入力（灰色）
-  const d1 = byDate['2026-10-01'];
-  assert.equal(d1[2], '未入力あり');
-  assert.deepEqual(col(d1, '家賃電気'), [250000, 250000, 0]);
-  assert.deepEqual(col(d1, '食品支出'), [500, 0, '未入力']);
-  assert.deepEqual(col(d1, 'ガス・カラオケ・Wi-Fi・電話'), [30000, 0, '未入力']);
-  assert.equal(bg('2026-10-01', '家賃電気'), '#d9ead3');
-  assert.equal(bg('2026-10-01', '食品支出'), '#eeeeee');
-  assert.equal(bg('2026-10-01', '保険'), '#eeeeee');
-  assert.equal(sh.bgs.get(rowNo('2026-10-01') + ':3'), '#eeeeee');
-  assert.equal(col(d1, '現金売上')[2], 0); assert.equal(bg('2026-10-01', '現金売上'), undefined); // 両方0は塗らない
-  // 10/02：数字のあるところは一致（緑）。ガスだけ未入力（灰色）。計は、未入力があるので灰色
-  const d2 = byDate['2026-10-02'];
-  assert.equal(d2[2], '未入力あり');
-  assert.deepEqual(col(d2, '現金売上'), [100000, 100000, 0]);
-  assert.deepEqual(col(d2, 'キャッシュレス売上'), [5000, 5000, 0]);
-  assert.deepEqual(col(d2, '加奈'), [15000, 15000, 0]);
-  assert.deepEqual(col(d2, '食品支出'), [800, 800, 0]);
-  assert.deepEqual(col(d2, 'ガス・カラオケ・Wi-Fi・電話'), [4900, 0, '未入力']);
-  assert.deepEqual(col(d2, '売上の計'), [105000, 105000, 0]);
-  assert.deepEqual(col(d2, '支出の計'), [20700, 15800, '未入力']);
-  assert.deepEqual(col(d2, '差し引き'), [84300, 89200, '未入力']);
-  assert.equal(bg('2026-10-02', '現金売上'), '#d9ead3');
-  assert.equal(bg('2026-10-02', '売上の計'), '#d9ead3');
-  assert.equal(bg('2026-10-02', '支出の計'), '#eeeeee');
-  // 10/10：現金は両方にあって違う（赤）。団体・加奈・食品は片方だけ（灰色）。結果は「ずれあり」
-  const d10 = byDate['2026-10-10'];
-  assert.equal(d10[2], 'ずれあり');
-  assert.deepEqual(col(d10, '現金売上'), [25000, 28000, 3000]);
-  assert.deepEqual(col(d10, '団体売上'), [0, 50000, '未入力']);
-  assert.deepEqual(col(d10, '加奈'), [10000, 0, '未入力']);
-  assert.deepEqual(col(d10, '食品支出'), [3000, 0, '未入力']);
-  assert.equal(d10[3], 3000); // ずれの合計は、赤い所だけ
-  assert.equal(bg('2026-10-10', '現金売上'), '#f4c7c3');
-  assert.equal(bg('2026-10-10', '団体売上'), '#eeeeee');
-  assert.equal(sh.bgs.get(rowNo('2026-10-10') + ':3'), '#f4c7c3');
-  // 10/14：すべて一致
-  assert.equal(byDate['2026-10-14'][2], '一致');
-  assert.equal(sh.bgs.get(rowNo('2026-10-14') + ':3'), '#d9ead3');
-  assert.deepEqual(col(byDate['2026-10-14'], '現金売上'), [25000, 25000, 0]);
-  // 元の表に行がない日
-  assert.equal(byDate['2026-10-15'][2], '元の表に行なし');
-  assert.deepEqual(col(byDate['2026-10-15'], '現金売上'), ['', 1000, '']);
-  assert.equal(sh.bgs.get(rowNo('2026-10-15') + ':3'), '#eeeeee');
-  // 月の合計（元の表の行がある日だけ）
-  const tot = byDate['合計'];
-  assert.deepEqual(col(tot, '現金売上'), [150000, 153000, 3000]);
-  assert.equal(bg('合計', '現金売上'), '#f4c7c3');
-  assert.deepEqual(col(tot, '家賃電気'), [250000, 250000, 0]);
-  assert.equal(bg('合計', '家賃電気'), '#d9ead3');
-  assert.deepEqual(col(tot, '食品支出'), [4300, 800, 3500 * -1]);
-  assert.equal(tot[3], names.reduce((sum, n) => sum + (bg('合計', n) === '#f4c7c3' ? Math.abs(col(tot, n)[2]) : 0), 0)); // 赤い所の差の合計
-
-  env.gas.buildReconcileSheet_(); // もう一度作っても1つのまま
-  assert.equal(env.sheets.filter(s => s.name === '突き合わせ').length, 1);
-});
-
-test('突き合わせ：試運転の記録がまだないときは、そのことを書く', () => {
-  const { env, source } = legacyEnv();
-  env.gas.importLegacy_(source(), '2026-10-14');
-  const sh = env.ss.getSheetByName('突き合わせ');
-  assert.match(sh.getRange(1, 1).getValues()[0][0], /試運転の記録がまだありません/);
 });
 
 test('運用開始日が月の途中のとき、その月は「運用開始日より前＝管理シート、以降＝アプリ」で数える', () => {

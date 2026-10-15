@@ -228,13 +228,12 @@ test('月次（分析）：目標までの材料として、まだ来ていな�
   assert.equal(env.call('monthly', { mgrToken, month: '2026-12' }).summary.pendingExpected, 0);
 });
 
-test('古い形のタブを作り直しても、タブの並び（9月・10月・11月・突き合わせ）が崩れない', () => {
+test('古い形のタブを作り直しても、タブの並び（11月（アプリ）・11月（手打ち））が崩れない', () => {
   const env = boot('2026-10-20T10:00:00+09:00');
   env.gas.createNextMonthTab_();
-  env.ss.insertSheet('突き合わせ');
-  env.gas.arrangeTabs_(env.ss, ['11月', '突き合わせ']);
-  env.ss.getSheetByName('11月').getRange(1, 8).setValue('加奈'); // 古い形のまね
+  env.gas.createHandTab_('2026-11');
+  env.ss.getSheetByName('11月（アプリ）').getRange(1, 8).setValue('加奈'); // 古い形のまね
   env.gas.createNextMonthTab_(); // 作り直す
-  const names = env.sheets.map(s => s.name).filter(n => n === '11月' || n === '突き合わせ');
-  assert.deepEqual(names, ['11月', '突き合わせ']);
+  const names = env.sheets.map(s => s.name).filter(n => n.startsWith('11月'));
+  assert.deepEqual(names, ['11月（アプリ）', '11月（手打ち）']);
 });

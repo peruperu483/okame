@@ -228,7 +228,7 @@ test('9月・10月（管理シートから取り込んだ月）は、これま�
   }
   // 取り込んだあとに来月のタブを作っても、9月・10月は変わらない
   env.gas.createNextMonthTab_();
-  assert.deepEqual(env.sheets.map(s => s.name).slice(0, 4), ['9月', '10月', '11月', '突き合わせ']);
+  assert.deepEqual(env.sheets.map(s => s.name).slice(0, 3), ['9月', '10月', '11月']);
   assert.equal(env.ss.getSheetByName('10月').getRange(2, 16).getValue(), 250000);
 });
 

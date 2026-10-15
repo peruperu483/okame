@@ -198,6 +198,7 @@ class Sheet {
       removeEditors: us => { us.forEach(u => editors.delete(u.getEmail())); },
       getEditors: () => [...editors].map(e => ({ getEmail: () => e })),
       setUnprotectedRanges(r) { this.unprotected = r; return this; },
+      remove: () => { this.protection = null; },
       getUnprotectedRanges() { return this.unprotected || []; },
       canDomainEdit: () => domain,
       setDomainEdit: v => { domain = v; }
@@ -215,9 +216,11 @@ class Sheet {
 
 function jst(d) { return new Date(d.getTime() + 9 * 3600e3); }
 
-export function loadGas(file) {
+// opts.handTab：初期設定で「11月（手打ち）」を自動で作る（それを確かめるテストだけ true。ほかのテストは「11月」の名前でアプリのタブを見る）
+export function loadGas(file, opts = {}) {
   const sheets = [new Sheet('シート1')];
   const props = new Map();
+  if (!opts.handTab) props.set('HANDTAB_AUTO:2026-11', '1');
   const cache = new Map();
   const logs = [];
   const triggers = [];
@@ -258,7 +261,7 @@ export function loadGas(file) {
     Session: { getEffectiveUser: () => ({ getEmail: () => 'hayashi@example.com' }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props.get(k) ?? null, setProperty: (k, v) => props.set(k, v) }) },
     CacheService: { getScriptCache: () => ({ get: k => cache.get(k) ?? null, put: (k, v) => cache.set(k, v), remove: k => cache.delete(k) }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     Utilities: {
       getUuid: () => crypto.randomUUID(),
       DigestAlgorithm: { SHA_256: 'sha256' },

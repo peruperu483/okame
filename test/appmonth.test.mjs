@@ -106,11 +106,8 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
   assert.equal(g[2][10], 7000);
   assert.equal(g[32][8], '=SUM(I2:I32)'); // 合計の式は残る
 
-  // 月のタブの並び：9月・10月の取り込みがなくても、突き合わせより前に11月が来る
-  env.gas.buildReconcileSheet_();
-  env.gas.arrangeTabs_(env.ss, env.gas.monthTabNames_(env.ss, env.gas.getSettings_()));
-  const order = env.sheets.map(s => s.name);
-  assert.ok(order.indexOf('11月') < order.indexOf('突き合わせ'));
+  // 月のタブの並び：9月・10月の取り込みがなくても、11月が並びに入る
+  assert.deepEqual(plain(env.gas.monthTabNames_(env.ss, env.gas.getSettings_())), ['9月', '10月', '11月']);
 
   // 試運転の日（運用開始日より前）の閉店では、タブを作らない
   sync([['closings', '2026-10-30', { bizDate: '2026-10-30', countedCash: 1000 }]]);

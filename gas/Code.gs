@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.6.0';
+var APP_VERSION = '0.7.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -149,7 +149,8 @@ var DEFAULT_SETTINGS = {
   visibility: { eventContact: true },
   // days=0 はその営業日だけ。1なら前日まで。未来の日付（予定・希望休）はいつでも
   staffEdit: { days: 0, tables: ['visits', 'closings', 'days', 'cashMoves', 'events', 'requests'] },
-  targets: { monthlySales: 1000000, dailyGuests: 10, monthlyEvents: 0 }
+  targets: { monthlySales: 1000000, dailyGuests: 10, monthlyEvents: 0 },
+  managerFee: 200000 // 店長報酬（月額）。店長だけが見られる（バイトには返さない）
 };
 
 var SETTING_LABELS = {
@@ -173,7 +174,8 @@ var SETTING_LABELS = {
   eventTypes: '予定の種類',
   visibility: 'バイトに見せる範囲',
   staffEdit: 'バイトが直せる範囲（何日前まで・どの記録）',
-  targets: '目標'
+  targets: '目標',
+  managerFee: '店長報酬（月額・円。店長だけが見られる）'
 };
 
 var MGR_TTL_SEC = 2 * 60 * 60;
@@ -190,6 +192,7 @@ function onOpen() {
     .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
     .addItem('突き合わせを作り直す', 'buildReconcile')
+    .addItem('月のタブを作り直す（11月以降）', 'buildAppMonthTabs')
     .addSeparator()
     .addItem('テストの行を消す', 'deleteTestRows')
     .addItem('共有トークンを作り直す', 'rotateTokenWithConfirm')
@@ -390,11 +393,11 @@ function handle_(body) {
 
   switch (body.action) {
     case 'bootstrap':
-      return ok_({ settings: settings, mgr: ctx.mgr, version: APP_VERSION, serverTime: nowIso_() });
+      return ok_({ settings: publicSettings_(settings, ctx), mgr: ctx.mgr, version: APP_VERSION, serverTime: nowIso_() });
     case 'fetch':
       return ok_({ rows: fetchRows_(body.table, body.from, body.to, ctx) });
     case 'sync':
-      return ok_({ results: withLock_(function () { return applyOps_(body.ops || [], ctx); }) });
+      return ok_({ results: withLock_(function () { var res = applyOps_(body.ops || [], ctx); rebuildTabsAfterClosing_(body.ops); return res; }) });
     case 'login':
       return ok_(login_(String(body.pin || '')));
     case 'logout':
@@ -421,6 +424,14 @@ function handle_(body) {
     default:
       fail_('bad_action', '知らない操作です：' + body.action);
   }
+}
+
+/** 店長でない人には、店長だけが見られる設定（店長報酬）を返さない */
+function publicSettings_(settings, ctx) {
+  if (ctx.mgr) return settings;
+  var s = JSON.parse(JSON.stringify(settings));
+  delete s.managerFee;
+  return s;
 }
 
 // ===== 読み込み =====
@@ -788,7 +799,7 @@ function importLegacy_(source, today) {
   });
   arrangeTabs_(ss, Object.keys(LEGACY_TABS));
   var recon = buildReconcileSheet_();
-  arrangeTabs_(ss, Object.keys(LEGACY_TABS).concat([RECON_SHEET]));
+  arrangeTabs_(ss, monthTabNames_(ss, settings));
   hide_(daily); // 普段は見えなくする（アプリの分析が読む。確認したいときは、タブの一覧から表示できる）
   hide_(monthly);
   result.forEach(function (x) { x.tabs = tpl.how; x.recon = recon; });
@@ -855,6 +866,7 @@ function prepareMonthTemplate_(ss, srcSheet) {
   if (!tpl) tpl = buildPlainTemplate_(ss);
   protect_(tpl);
   hide_(tpl);
+  PropertiesService.getScriptProperties().setProperty('MONTH_TPL_HOW', how);
   return { sheet: tpl, how: how };
 }
 
@@ -904,12 +916,16 @@ function hide_(sh) { try { sh.hideSheet(); } catch (e) { console.error("タブ�
 function blankRow_() { var r = []; for (var i = 0; i < 18; i++) r.push(''); return r; }
 
 /** 1か月分のタブを作る（あれば作り直す）。days は parseLegacyTab_ の結果。today までの日だけ中身が入る */
-function writeMonthTab_(ss, tpl, label, month, days) {
-  var old = ss.getSheetByName(label);
-  if (old) ss.deleteSheet(old);
-  var sh = tpl.sheet.copyTo(ss);
-  sh.setName(label);
-  try { sh.showSheet(); } catch (e) { /* もとから見えている */ }
+function writeMonthTab_(ss, tpl, label, month, days, inPlace) {
+  var sh = ss.getSheetByName(label);
+  if (sh && inPlace) {
+    sh.getRange(2, 1, MONTH_ROWS, 18).setBackground(null); // 塗りは付け直す（タブそのものは作り直さない）
+  } else {
+    if (sh) ss.deleteSheet(sh);
+    sh = tpl.sheet.copyTo(ss);
+    sh.setName(label);
+    try { sh.showSheet(); } catch (e) { /* もとから見えている */ }
+  }
   var byDate = {};
   days.forEach(function (d) { byDate[d.date] = d; });
   var n = daysInMonth_(month);
@@ -1114,6 +1130,136 @@ function mergeLegacyDays_(s, rows, settings) {
   return s;
 }
 
+// ===== 11月以降の月のタブ：アプリの記録から、9月・10月と同じ形で作る =====
+// 閉店・レジ締めのたびに、その月のタブだけを作り直す（タブは作り直さず、中身を書き換える）。
+// 試運転の記録（運用開始日より前・試運転の印）は数えない。月次と同じ数え方。
+
+/** 「11月」「12月」…（2026年以外は「2027年1月」の形） */
+function monthTabLabel_(month) {
+  var p = month.split('-').map(Number);
+  return (p[0] === 2026 ? '' : p[0] + '年') + p[1] + '月';
+}
+
+/** アプリの記録から作る月（運用開始日の月から今月まで。管理シートの月（9月・10月）は除く） */
+function appMonths_(settings) {
+  var goLive = String(settings.goLiveDate || '');
+  if (!goLive) return [];
+  var legacy = Object.keys(LEGACY_TABS).map(function (k) { return LEGACY_TABS[k]; });
+  var now = Utilities.formatDate(now_(), TZ, 'yyyy-MM');
+  var months = [];
+  for (var m = goLive.slice(0, 7); m <= now; m = nextMonth_(m)) if (legacy.indexOf(m) < 0) months.push(m);
+  return months;
+}
+
+/** 下のタブの並び：9月・10月・（11月以降）・突き合わせ */
+function monthTabNames_(ss, settings) {
+  var names = Object.keys(LEGACY_TABS);
+  appMonths_(settings).forEach(function (m) { var l = monthTabLabel_(m); if (ss.getSheetByName(l)) names.push(l); });
+  return names.concat([RECON_SHEET]);
+}
+
+/** 月のタブの元になる見た目。なければ（取り込みの前でも）自前で作る */
+function getMonthTemplate_(ss) {
+  var sh = ss.getSheetByName(MONTH_TPL_SHEET);
+  if (!sh) return prepareMonthTemplate_(ss, null);
+  return { sheet: sh, how: PropertiesService.getScriptProperties().getProperty('MONTH_TPL_HOW') || 'plain' };
+}
+
+/** その月の日ごとの数字（管理シートの形：parseLegacyTab_ の1日分と同じ項目） */
+function appMonthDays_(month, settings) {
+  var goLive = String(settings.goLiveDate || '');
+  var n = function (v) { return Number(v) || 0; };
+  var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
+  var today = serverBizDate_(settings);
+  var byDate = {};
+  var at = function (d) {
+    return byDate[d] = byDate[d] || { date: d, shiftCells: [], closed: false, event: '', eventNames: [], laborKana: 0, laborOther: 0, cash: 0, group: 0,
+      cashless: 0, point: 0, food: 0, other: 0, fixed: {}, bg: {} };
+  };
+  var n2 = daysInMonth_(month);
+  for (var i = 1; i <= n2; i++) { var d0 = month + '-' + pad2_(i); if (d0 <= today && counted_(d0, goLive)) at(d0); }
+  readTable_(TABLES.visits).rows.forEach(function (v) {
+    if (v.status !== '退店' || v.trial === true || !inMonth(v.bizDate)) return;
+    var f = at(v.bizDate);
+    if (v.kind === 'イベント') {
+      f.group += n(v.total);
+      if (v.name && f.eventNames.indexOf(v.name) < 0) f.eventNames.push(v.name);
+    } else { f.cash += n(v.cash); f.cashless += n(v.cashless); f.point += n(v.point); }
+  });
+  readTable_(TABLES.closings).rows.forEach(function (c) { if (c.trial !== true && inMonth(c.bizDate)) at(c.bizDate); });
+  readTable_(TABLES.purchases).rows.forEach(function (p) {
+    if (p.status === '削除' || !inMonth(p.date)) return;
+    at(p.date)[p.category === '飲食物' ? 'food' : 'other'] += n(p.amount);
+  });
+  readTable_(TABLES.attendance).rows.forEach(function (a) {
+    if (a.status === '削除' || !inMonth(a.bizDate)) return;
+    var f = at(a.bizDate);
+    if (a.name === '加奈' && a.kind !== '手打ち') f.laborKana += n(a.cost); else f.laborOther += n(a.cost);
+  });
+  var planned = {};
+  readTable_(TABLES.events).rows.forEach(function (e) {
+    if (e.status === '削除' || !inMonth(e.date) || !e.title) return;
+    (planned[e.date] = planned[e.date] || []).push(String(e.title));
+  });
+  readTable_(TABLES.days).rows.forEach(function (r) {
+    if (!inMonth(r.bizDate)) return;
+    var f = at(r.bizDate);
+    if (r.closed === true) { f.closed = true; f.shiftCells = ['店休日', '', '', '']; return; }
+    var names = String(r.shiftActual || r.shiftPlan || '').split(/[、,，\s]+/).filter(String);
+    names.sort(function (a, b) { var rank = function (x) { return x === '岡本' ? 0 : x === '加奈' ? 1 : 2; }; return rank(a) - rank(b); });
+    f.shiftCells = [names[0] || '', names[1] || '', names[2] || '', names.slice(3).join('、')];
+  });
+  Object.keys(byDate).forEach(function (d) {
+    var f = byDate[d];
+    f.event = f.eventNames.length ? f.eventNames.join('、') : (planned[d] || []).join('、');
+  });
+  // 固定費は月に1回の入力なので、月の1日の行に入れる
+  readTable_(TABLES.fixedCosts).rows.forEach(function (f) {
+    if (f.status === '削除' || f.month !== month || !counted_(f.month, goLive)) return;
+    var first = at(month + '-01');
+    first.fixed[f.item] = (first.fixed[f.item] || 0) + n(f.amount);
+  });
+  return Object.keys(byDate).sort().map(function (d) { return byDate[d]; });
+}
+
+/** その月のタブを作る（なければ見本から。あれば中身だけ書き換える） */
+function rebuildAppMonthTab_(month) {
+  var settings = getSettings_();
+  var ss = SpreadsheetApp.getActive();
+  var label = monthTabLabel_(month);
+  var existed = !!ss.getSheetByName(label);
+  var tpl = getMonthTemplate_(ss);
+  writeMonthTab_(ss, tpl, label, month, appMonthDays_(month, settings), true);
+  if (!existed) arrangeTabs_(ss, monthTabNames_(ss, settings));
+  return label;
+}
+
+/** 運用開始日以降の月のタブを、すべて作り直す（メニュー） */
+function buildAppMonthTabs() {
+  var months = appMonths_(getSettings_());
+  if (!months.length) { notify_('運用開始日（' + getSettings_().goLiveDate + '）になる前なので、アプリの記録から作る月のタブはまだありません。'); return; }
+  var labels = withLock_(function () { return months.map(rebuildAppMonthTab_); });
+  notify_('月のタブを作り直しました（' + labels.join('・') + '）。');
+}
+
+/** 閉店・レジ締めを受け取ったとき、その月のタブだけを作り直す。失敗しても、閉店の記録は止めない */
+function rebuildTabsAfterClosing_(ops) {
+  try {
+    var settings = getSettings_();
+    var allowed = appMonths_(settings);
+    var done = {};
+    (ops || []).forEach(function (op) {
+      if (!op || op.table !== 'closings') return;
+      var m = monthOf_(String((op.data && op.data.bizDate) || op.id || ''));
+      if (!/^\d{4}-\d{2}$/.test(m) || allowed.indexOf(m) < 0 || done[m]) return;
+      done[m] = true;
+      rebuildAppMonthTab_(m);
+    });
+  } catch (e) {
+    console.error('月のタブを作り直せませんでした：' + e.message);
+  }
+}
+
 /** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
 function importLegacy() {
   var ui = SpreadsheetApp.getUi();
@@ -1219,9 +1365,9 @@ function monthlySummary_(month, settings) {
 /** 合計・率・目標など、記録から出す数字を足す */
 function finishSummary_(s, settings) {
   var t = settings.targets || {};
-  s.expenses = s.purchaseTotal + s.fixedTotal + s.laborTotal;
-  s.profitBeforeMgr = s.sales - s.expenses;
-  s.mgrFee = null; // 店長の報酬（利益連動）。計算はあとで足す
+  s.mgrFee = Number(settings.managerFee) || 0; // 店長報酬（月額）
+  s.expenses = s.purchaseTotal + s.fixedTotal + s.laborTotal + s.mgrFee;
+  s.profit = s.sales - s.expenses; // 差し引き（店長報酬を引いたあと）
   s.avgPerGuest = s.guests ? Math.round(s.sales / s.guests) : 0;
   s.normalDailyAvg = s.openDays ? Math.round((s.sales - s.event) / s.openDays) : 0;
   s.laborRate = s.sales ? Math.round(s.laborTotal / s.sales * 1000) / 10 : 0;
@@ -1292,9 +1438,7 @@ function buildMonthlySheet_() {
     ['　現金', function (s) { return s.cash; }], ['　キャッシュレス', function (s) { return s.cashless; }], ['　ポイント', function (s) { return s.point; }],
     ['　飲み放題', function (s) { return s.nomi; }], ['　単品', function (s) { return s.tanpin; }], ['　イベント', function (s) { return s.event; }],
     ['来客数', function (s) { return s.guests; }], ['組数', function (s) { return s.groups; }], ['客単価', function (s) { return s.avgPerGuest; }],
-    ['営業日数', function (s) { return s.openDays; }], ['店休日', function (s) { return s.closedDays; }],
-    ['売上0円の営業日', function (s) { return s.zeroDays.join('、'); }], ['通常営業の1日平均', function (s) { return s.normalDailyAvg; }],
-    ['イベントの組数', function (s) { return s.eventGroups; }],
+    ['営業日数', function (s) { return s.openDays; }], ['通常営業の1日平均', function (s) { return s.normalDailyAvg; }],
     ['仕入れ', function (s) { return s.purchaseTotal; }],
     ['　飲食物', function (s) { return s.purchases['飲食物']; }], ['　備品', function (s) { return s.purchases['備品']; }],
     ['　その他', function (s) { return s.purchases['その他']; }], ['　その他の内容', function (s) { return s.otherNotes.join('・'); }],
@@ -1304,9 +1448,9 @@ function buildMonthlySheet_() {
     .concat(staffNames.map(function (nm) { return ['　' + nm, function (s) { var r = s.laborFixed.filter(function (x) { return x.name === nm; })[0]; return r ? r.cost : 0; }]; }))
     .concat([
       ['　人件費（その他）', function (s) { return s.laborOthers.cost; }],
+      ['店長報酬', function (s) { return s.mgrFee; }],
       ['支出', function (s) { return s.expenses; }],
-      ['差し引き（店長報酬前）', function (s) { return s.profitBeforeMgr; }],
-      ['店長報酬（あとで）', function () { return ''; }],
+      ['差し引き', function (s) { return s.profit; }],
       ['人件費率（%）', function (s) { return s.laborRate; }],
       ['原価率（飲食物・%）', function (s) { return s.costRate; }],
       ['取り込み', function (s) { return s.legacy ? '管理シート' : 'アプリ'; }]

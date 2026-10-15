@@ -8,7 +8,14 @@ const STAFF_TABLES = [
 ];
 
 export function renderSettings(root, app) {
-  return app.auth.isMgr() ? renderForm(root, app) : renderPinGate(root, app, '設定', '設定を開くには、店長の暗証番号を入れてください。');
+  if (!app.auth.isMgr()) return renderPinGate(root, app, '設定', '設定を開くには、店長の暗証番号を入れてください。');
+  // 店長報酬は店長にしか返らない。店長モードになったあと、1回だけ読み直す
+  if (app.settings.managerFee === undefined && !app.settingsAsMgr) {
+    root.replaceChildren(h('p', { class: 'help' }, '設定を読んでいます…'));
+    app.settingsAsMgr = true;
+    return app.refreshSettings().catch(() => {}).then(() => { root.replaceChildren(); renderForm(root, app); });
+  }
+  return renderForm(root, app);
 }
 
 // ===== 設定の本体 =====
@@ -103,6 +110,11 @@ function renderForm(root, app) {
       listEditor('固定費の項目', draft, 'fixedCostItems', dirty),
       listEditor('会計を取り消す理由', draft, 'cancelReasons', dirty),
       listEditor('入店を削除する理由', draft, 'deleteReasons', dirty)),
+
+    card('店長報酬',
+      num('店長報酬（月額）', () => draft.managerFee, x => { draft.managerFee = x; }, '円',
+        '月次の支出に入ります（9月・10月の分も同じ金額で計算します）。店長だけが見られます。'),
+      ),
 
     card('スタッフと時給',
       num('時給の初期値', () => draft.defaultWage, x => { draft.defaultWage = x; }, '円', '新しく足すスタッフの時給です。人ごとに変えられます。'),

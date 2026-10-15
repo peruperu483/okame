@@ -86,7 +86,15 @@ function boot() {
   });
   window.addEventListener('online', () => sync.flush());
   window.addEventListener('hashchange', route);
-  auth.onChange(() => { renderChrome(); route(); });
+  auth.onChange(() => {
+    if (!auth.isMgr() && app.settings && 'managerFee' in app.settings) { // 店長だけが見られる設定は、ロックしたら端末から消す
+      delete app.settings.managerFee;
+      app.settingsAsMgr = false;
+      store.kvSet('settings', app.settings);
+    }
+    renderChrome();
+    route();
+  });
   sync.onStatus(renderSyncStatus);
   setInterval(renderTopDay, 15e3);
 

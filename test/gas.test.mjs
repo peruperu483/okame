@@ -343,8 +343,9 @@ test('月次：退店した組・仕入れ・固定費・人件費から出す�
   assert.deepEqual(m.laborFixed, [{ name: '加奈', days: 2, hours: 11.5, transport: 2000, cost: 25000 }]);
   assert.deepEqual(m.laborOthers, { cost: 8000, count: 1, names: ['みか'] });
   assert.equal(m.laborTotal, 33000);
-  assert.equal(m.expenses, 5000 + 1000 + 100000 + 33000);
-  assert.equal(m.profitBeforeMgr, 47500 - 139000);
+  assert.equal(m.mgrFee, 200000); // 店長報酬（月額・設定の初期値）
+  assert.equal(m.expenses, 5000 + 1000 + 100000 + 33000 + 200000);
+  assert.equal(m.profit, 47500 - 339000);
   assert.equal(m.normalDailyAvg, Math.round((47500 - 40000) / 3));
   assert.equal(m.laborRate, 69.5);
   assert.equal(m.costRate, 10.5);
@@ -365,7 +366,9 @@ test('月次：退店した組・仕入れ・固定費・人件費から出す�
   assert.equal(row('　飲食物'), 5000);
   assert.equal(row('　その他の内容'), '花');
   assert.equal(row('　家賃'), 100000);
-  assert.equal(row('差し引き（店長報酬前）'), -91500);
+  assert.equal(row('店長報酬'), 200000);
+  assert.equal(row('差し引き'), -291500);
+  for (const gone of ['店休日', '売上0円の営業日', 'イベントの組数', '差し引き（店長報酬前）', '店長報酬（あとで）']) assert.ok(!vals.some(r => r[0] === gone), gone + 'は月次から消した');
   assert.ok(sh.protection);
 });
 

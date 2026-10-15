@@ -147,7 +147,7 @@ export function renderPlan(root, app) {
     const inp = (label, key, attrs = {}) => h('div', { class: 'field' }, h('div', { class: 'field-label' }, label),
       h('input', { class: 'input', value: String(v[key]), ...attrs, oninput: ev => { v[key] = ev.target.value; } }));
     const paintFields = () => {
-      if (type === T_CLOSED) return put(fields, h('p', { class: 'help' }, 'この日を店休日にします。カレンダーと月次の「店休日」に出ます。'));
+      if (type === T_CLOSED) return put(fields, h('p', { class: 'help' }, 'この日を店休日にします。カレンダーに出ます。'));
       if (type === T_REQUEST) {
         const names = st.staff.map(s => s.name);
         return put(fields, h('div', { class: 'field' }, h('div', { class: 'field-label' }, '名前'),

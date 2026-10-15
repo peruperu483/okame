@@ -3,7 +3,7 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, addDays } from '../bizday.js';
 import {
-  KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT,
+  KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT,
   label, payLabel, total, methodSums, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
 import { pickReason, seg } from '../ui.js';
@@ -21,7 +21,7 @@ export function renderToday(root, app) {
   const from = () => addDays(day(), -31); // 開店時の現金を引き継ぐために、前の締めを探す範囲
   const st = {
     visits: [], moves: [], closings: [], dayRow: null, staff: [],
-    regForm: null, rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
+    regForm: null, rOutKind: '買い出し', rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
     counted: '', members: null, last: null, closeMsg: ''
   };
 
@@ -97,16 +97,27 @@ export function renderToday(root, app) {
     const mgr = app.auth.isMgr();
     const canEdit = app.canEdit('cashMoves', day());
     const today = st.moves.filter(m => m.bizDate === day() && m.status !== ST_DEL).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const canCollect = mgr || S().staffCanCollect !== false; // バイトが回収を入れられるかは設定
     const pickBtns = (opts, cur, onPick) => opts.map(o => h('button', { class: 'btn pick' + (cur === o ? ' on' : ''), onclick: () => onPick(o) }, o));
     const amtInput = h('input', { class: 'input', type: 'number', inputmode: 'numeric', placeholder: '金額', value: st.rAmt, 'aria-label': st.regForm === 'out' ? '出す金額' : '入れる金額', oninput: e => { st.rAmt = e.target.value; } });
     let form = null;
-    if (st.regForm === 'out') {
+    if (st.regForm === 'out' && st.rOutKind === 'オーナーが回収' && canCollect) {
       form = h('div', { class: 'subform' },
+        h('div', { class: 'grid2' }, pickBtns(['買い出し', 'オーナーが回収'], st.rOutKind, k => { st.rOutKind = k; paintRegister(); })),
+        h('div', { class: 'small' }, 'オーナーがレジから抜いた分。仕入れ・支出には入りません（レジの「あるはずの現金」からだけ引きます）'),
+        amtInput,
+        h('input', { class: 'input', type: 'text', placeholder: 'メモ（なくてもよい）', value: st.rNote, 'aria-label': 'メモ', oninput: e => { st.rNote = e.target.value; } }),
+        mgr ? [h('label', { class: 'lab' }, '日付（閉店後や休みの日の回収。店長だけ）'),
+          h('input', { class: 'input', type: 'date', max: day(), value: st.rDate || day(), oninput: e => { st.rDate = e.target.value; } })] : null,
+        h('button', { class: 'btn btn-primary', onclick: () => saveMove(MOVE_COLLECT) }, '回収を記録'));
+    } else if (st.regForm === 'out') {
+      form = h('div', { class: 'subform' },
+        canCollect ? h('div', { class: 'grid2' }, pickBtns(['買い出し', 'オーナーが回収'], st.rOutKind, k => { st.rOutKind = k; paintRegister(); })) : null,
         h('div', { class: 'small' }, '買い出しなど。仕入れにも「レジから」として自動で入ります'),
         amtInput,
         h('div', { class: 'grid3' }, pickBtns(S().purchaseCategories || ['飲食物', '備品', 'その他'], st.rCat, c => { st.rCat = c; paintRegister(); })),
         st.rCat === 'その他' ? h('input', { class: 'input', type: 'text', placeholder: 'その他の内容（例：花）', value: st.rNote, 'aria-label': 'その他の内容', oninput: e => { st.rNote = e.target.value; } }) : null,
-        h('button', { class: 'btn btn-primary', onclick: () => saveMove(MOVE_OUT) }, '出金を記録'));
+        h('button', { class: 'btn btn-primary', onclick: () => saveMove(MOVE_OUT) }, '出金（買い出し）を記録'));
     } else if (st.regForm === 'in') {
       form = h('div', { class: 'subform' },
         amtInput,
@@ -125,12 +136,12 @@ export function renderToday(root, app) {
       today.map(m => h('div', { class: 'mrow' },
         h('span', { class: 'num muted2 mtime' }, fmtHM(m.at)),
         h('span', { class: 'grow' }, moveLabel(m)),
-        h('b', { class: 'num ' + (m.type === MOVE_OUT ? 'neg' : 'pos') }, (m.type === MOVE_OUT ? '−' : '＋') + yen(m.amount)),
-        canEdit ? h('button', { class: 'btn btn-xs danger', onclick: () => delMove(m) }, '消す') : null)));
+        h('b', { class: 'num ' + (m.type === MOVE_IN ? 'pos' : 'neg') }, (m.type === MOVE_IN ? '＋' : '−') + yen(m.amount)),
+        canEdit && (m.type !== MOVE_COLLECT || canCollect) ? h('button', { class: 'btn btn-xs danger', onclick: () => delMove(m) }, '消す') : null)));
   }
 
   function toggleForm(f) {
-    Object.assign(st, { regForm: st.regForm === f ? null : f, rAmt: '', rNote: '', rDate: '', rMsg: '' });
+    Object.assign(st, { regForm: st.regForm === f ? null : f, rOutKind: '買い出し', rAmt: '', rNote: '', rDate: '', rMsg: '' });
     paintRegister();
   }
 
@@ -138,16 +149,21 @@ export function renderToday(root, app) {
     const m = { type, amount: st.rAmt, category: st.rCat, note: st.rNote.trim() };
     const err = validateMove(m);
     if (err) { Object.assign(st, { rMsg: err, rBad: true }); return paintRegister(); }
-    const bizDate = type === MOVE_IN && app.auth.isMgr() && st.rDate ? st.rDate : day();
+    const bizDate = type !== MOVE_OUT && app.auth.isMgr() && st.rDate ? st.rDate : day(); // 閉店後・休みの日の入金と回収は、店長が日付を選べる
     if (bizDate > day()) { Object.assign(st, { rMsg: '先の日付には入れられません。', rBad: true }); return paintRegister(); }
     const id = uuid();
     const amount = Number(st.rAmt);
     const data = type === MOVE_OUT
       ? { bizDate, at: nowIso(), type, amount, category: m.category, note: m.category === 'その他' ? m.note : '', reason: '', purchaseId: 'cm-' + id, status: '有効' }
-      : { bizDate, at: nowIso(), type, amount, category: '', note: '', reason: st.rReason, purchaseId: '', status: '有効' };
+      : type === MOVE_COLLECT
+        ? { bizDate, at: nowIso(), type, amount, category: '', note: m.note, reason: '', purchaseId: '', status: '有効' }
+        : { bizDate, at: nowIso(), type, amount, category: '', note: '', reason: st.rReason, purchaseId: '', status: '有効' };
+    const when = bizDate !== day() ? `（${bizDate.slice(5).replace('-', '/')}の分）` : '';
     Object.assign(st, {
       regForm: null, rAmt: '', rNote: '', rDate: '', rBad: false,
-      rMsg: type === MOVE_OUT ? `出金 ${yen(amount)} を記録しました（仕入れにも入りました）` : `入金 ${yen(amount)} を記録しました` + (bizDate !== day() ? `（${bizDate.slice(5).replace('-', '/')}の分）` : '')
+      rMsg: type === MOVE_OUT ? `出金（買い出し）${yen(amount)} を記録しました（仕入れにも入りました）`
+        : type === MOVE_COLLECT ? `オーナーの回収 ${yen(amount)} を記録しました（仕入れ・支出には入りません）` + when
+          : `入金 ${yen(amount)} を記録しました` + when
     });
     await app.sync.save('cashMoves', id, data);
   }
@@ -187,14 +203,15 @@ export function renderToday(root, app) {
     put(closeBox,
       h('h2', {}, '閉店・レジ締め'),
       inStore.length ? h('div', { class: 'alert', role: 'alert' }, `店内に${inStore.length}組残っています。全員退店すると閉店できます`) : null,
-      closing && (closingIsStale(closing, sum) || Number(closing.cashIn) !== reg.cashIn || Number(closing.cashOut) !== reg.cashOut)
+      closing && (closingIsStale(closing, sum) || Number(closing.cashIn) !== reg.cashIn || Number(closing.cashOut) !== reg.cashOut || Number(closing.collected || 0) !== reg.collected)
         ? h('div', { class: 'alert warn', role: 'alert' }, '閉店のあとに会計やレジの出し入れが変わりました。締め直してください。') : null,
       openLine,
       row('開店時のレジの現金' + (reg.openFrom === 'carry' ? '（前日から引き継ぎ）' : reg.openFrom === 'manual' ? '（手で入れた金額）' : ''), reg.openCash == null ? '—' : yen(reg.openCash)),
       mgr && reg.openFrom !== 'none' && !st.editOpen ? h('button', { class: 'linkbtn', onclick: () => { st.editOpen = true; paintAll(); } }, '開店時の現金を直す') : null,
       row('＋ 今日の現金売上', yen(sum.cash)),
       row('＋ 入金', yen(reg.cashIn)),
-      row('− 出金', yen(reg.cashOut)),
+      row('− 出金（買い出し）', yen(reg.cashOut)),
+      row('− 回収（オーナーが抜いた分）', yen(reg.collected)),
       row('＝ あるはずの現金', yen(reg.expected), true),
       h('label', { class: 'lab', for: 'regCash' }, 'レジの現金（数えた金額）'),
       h('input', {
@@ -236,7 +253,7 @@ export function renderToday(root, app) {
     const data = {
       bizDate: day(), closedAt: nowIso(),
       ...Object.fromEntries(SUM_KEYS.map(k => [k, sum[k]])),
-      openCash: reg.openCash, cashIn: reg.cashIn, cashOut: reg.cashOut, expectedCash: reg.expected,
+      openCash: reg.openCash, cashIn: reg.cashIn, cashOut: reg.cashOut, collected: reg.collected, expectedCash: reg.expected,
       countedCash: counted, diff: counted - reg.expected, trial: app.isTrial(day())
     };
     st.closeMsg = `閉店しました。差額 ${signedYen(data.diff)}。数えた ${yen(counted)} が次の営業日の開店時の現金になります`;

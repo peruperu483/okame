@@ -4,7 +4,8 @@
 // - 組の合計 = 基本の金額（入店のときに決まる）＋ 追加の合計
 // - 受け取りは何回でも（割り勘・併用）。合計に達したら退店
 // - 売上・来客数に数えるのは「退店」した組だけ。店内の組の合計は「見込み」
-// - あるはずの現金 = 開店時のレジの現金 ＋ 今日の現金売上 ＋ 入金 − 出金
+// - あるはずの現金 = 開店時のレジの現金 ＋ 今日の現金売上 ＋ 入金 − 出金（買い出し） − 回収（オーナーがレジから抜いた分）
+//   回収は支出ではない（仕入れにも月次にも入れない）。レジの現金からだけ引く
 
 export const KIND_NOMI = '飲み放題';
 export const KIND_TANPIN = '単品';
@@ -16,6 +17,7 @@ export const ST_OUT = '退店';
 export const ST_DEL = '削除';
 export const MOVE_IN = '入金';
 export const MOVE_OUT = '出金';
+export const MOVE_COLLECT = '回収';
 export const EXTRA_ADD = '追加';
 export const EXTRA_EXT = '延長';
 
@@ -136,8 +138,9 @@ export const pct = (part, whole) => (whole ? Math.round(part / whole * 100) : 0)
 const signed = m => (m.type === MOVE_IN ? 1 : -1) * n(m.amount);
 const active = moves => (moves || []).filter(m => m.status !== ST_DEL);
 
-/** 出し入れの表示：「出金・その他（花）」「入金・オーナーの補充」 */
+/** 出し入れの表示：「出金・その他（花）」「入金・オーナーの補充」「オーナーが回収（メモ）」 */
 export function moveLabel(m) {
+  if (m.type === MOVE_COLLECT) return 'オーナーが回収' + (m.note ? `（${m.note}）` : '');
   return m.type === MOVE_OUT ? `出金・${purchaseLabel(m.category, m.note)}` : `入金・${m.reason || ''}`;
 }
 
@@ -148,6 +151,7 @@ export function purchaseLabel(category, note) {
 /** 出し入れの入力の確認。問題がなければ空文字 */
 export function validateMove({ type, amount, category, note }) {
   if (!isInt(amount) || Number(amount) <= 0) return '金額を入れてください。';
+  if (type === MOVE_COLLECT) return ''; // 回収は金額だけ（メモは任意）
   if (type === MOVE_OUT && !category) return '科目を選んでください。';
   if (type === MOVE_OUT && category === 'その他' && !String(note || '').trim()) return 'その他の内容を入れてください。';
   return '';
@@ -178,7 +182,8 @@ export function registerCalc({ day, closings, moves, dayRow, cashSales, until })
   const today = act.filter(m => m.bizDate === day && (!until || String(m.at) <= String(until)));
   const cashIn = today.filter(m => m.type === MOVE_IN).reduce((a, m) => a + n(m.amount), 0);
   const cashOut = today.filter(m => m.type === MOVE_OUT).reduce((a, m) => a + n(m.amount), 0);
-  return { openCash, openFrom, cashIn, cashOut, expected: n(openCash) + n(cashSales) + cashIn - cashOut };
+  const collected = today.filter(m => m.type === MOVE_COLLECT).reduce((a, m) => a + n(m.amount), 0);
+  return { openCash, openFrom, cashIn, cashOut, collected, expected: n(openCash) + n(cashSales) + cashIn - cashOut - collected };
 }
 
 /** 締めたあとに会計が変わったか */

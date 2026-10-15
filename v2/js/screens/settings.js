@@ -94,6 +94,11 @@ function renderForm(root, app) {
             } }),
           h('span', {}, label)))))),
 
+    card('レジの回収',
+      swOnOff('バイトも、オーナーの回収を入れられる', () => draft.staffCanCollect !== false, x => { draft.staffCanCollect = x; },
+        'オーナーがレジから抜いた分（仕入れ・支出には入りません）。いいえにすると、店長だけが入れられます。'),
+      ),
+
     card('バイトに見せる範囲',
       h('p', { class: 'help' }, '今日・店内・予定はいつも見せます。分析とその他（勤怠・仕入れ・固定費・設定）は店長だけです。'),
       h('div', { class: 'vis' },

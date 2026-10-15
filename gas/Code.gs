@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.7.0';
+var APP_VERSION = '0.8.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -44,12 +44,13 @@ var TABLES = {
       ['sales', '売上', 'n'], ['guests', '来客数', 'n'], ['groups', '組数', 'n'],
       ['cash', '現金', 'n'], ['cashless', 'キャッシュレス', 'n'], ['point', 'ポイント', 'n'],
       ['nomi', '飲み放題', 'n'], ['tanpin', '単品', 'n'], ['event', 'イベント', 'n'],
-      ['openCash', '開店時の現金', 'n'], ['cashIn', '入金', 'n'], ['cashOut', '出金', 'n'],
+      ['openCash', '開店時の現金', 'n'], ['cashIn', '入金', 'n'], ['cashOut', '出金', 'n'], ['collected', '回収', 'n'],
       ['expectedCash', 'あるはずの現金', 'n'], ['countedCash', '数えた現金', 'n'], ['diff', '差額', 'n'],
       ['trial', '試運転', 'b']
     ].concat(COMMON_TAIL)
   },
-  // レジの出し入れ。出金はGASが仕入れにも「レジから」として自動で記録する（消すと仕入れも消す）
+  // レジの出し入れ。種類は 入金／出金（買い出し）／回収（オーナーがレジから抜いた分）。
+  // 出金はGASが仕入れにも「レジから」として自動で記録する（消すと仕入れも消す）。入金と回収は仕入れに入れない
   cashMoves: {
     sheet: 'レジの出し入れ', read: 'open', write: 'staff', dateKey: 'bizDate',
     cols: [
@@ -144,6 +145,7 @@ var DEFAULT_SETTINGS = {
   purchaseCategories: ['飲食物', '備品', 'その他'],
   purchaseRules: [],
   cashInReasons: ['オーナーの補充', 'その他'],
+  staffCanCollect: true, // バイトも、オーナーの回収（レジから抜いた分）を入れられる
   fixedCostItems: ['家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険'],
   eventTypes: ['団体', '日本酒の会', '貸切'],
   visibility: { eventContact: true },
@@ -170,6 +172,7 @@ var SETTING_LABELS = {
   purchaseCategories: '仕入れの科目',
   purchaseRules: '仕入れの科目を決めるルール（店名の言葉 → 科目）',
   cashInReasons: 'レジに入れる理由',
+  staffCanCollect: 'バイトも、オーナーの回収を入れられる',
   fixedCostItems: '固定費の項目',
   eventTypes: '予定の種類',
   visibility: 'バイトに見せる範囲',
@@ -450,10 +453,18 @@ function fetchRows_(tableKey, from, to, ctx) {
 function applyOps_(ops, ctx) {
   var results = [];
   var byTable = {};
+  var collectIds = null; // 回収の行のID（バイトに回収を許さない設定のときだけ読む）
   ops.forEach(function (op) {
     var def = TABLES[op && op.table];
     if (!def) { results.push({ opId: op && op.opId, ok: false, code: 'bad_table' }); return; }
     if (def.write === 'mgr' && !ctx.mgr) { results.push({ opId: op.opId, ok: false, code: 'forbidden' }); return; }
+    if (op.table === 'cashMoves' && !ctx.mgr && ctx.settings.staffCanCollect === false) { // バイトに回収を許さない設定
+      if (collectIds === null) {
+        collectIds = {};
+        readTable_(TABLES.cashMoves).rows.forEach(function (m) { if (m.type === '回収') collectIds[m.id] = true; });
+      }
+      if ((op.data && op.data.type === '回収') || collectIds[String(op.id)]) { results.push({ opId: op.opId, ok: false, code: 'forbidden' }); return; }
+    }
     if (!op.id || typeof op.data !== 'object' || !op.data) { results.push({ opId: op.opId, ok: false, code: 'bad_op' }); return; }
     (byTable[op.table] = byTable[op.table] || []).push(op);
   });
@@ -469,7 +480,7 @@ function applyOps_(ops, ctx) {
 }
 
 /**
- * レジからの出金を仕入れにも写す（仕入れのID＝'cm-'＋出し入れのID。何度写しても1件）。
+ * レジからの出金（買い出し）を仕入れにも写す。回収（オーナーが抜いた分）と入金は写さない（仕入れのID＝'cm-'＋出し入れのID。何度写しても1件）。
  * 出金を消したら（または入金に変えたら）仕入れも「削除」にする。バイトの出金でも写せるように、ここは店長の権限で書く
  */
 function syncPurchasesFromMoves_(ids, ctx) {

@@ -119,7 +119,7 @@ test('レジ：前の締めの数えた現金を引き継ぎ、あるはずの�
     mv('2026-11-01', '出金', 500, '2026-11-01T19:00:00+09:00', { status: '削除' })
   ];
   assert.deepEqual(registerCalc({ day: '2026-11-01', closings, moves, cashSales: 30000 }),
-    { openCash: 45000, openFrom: 'carry', cashIn: 10000, cashOut: 3200, expected: 81800 });
+    { openCash: 45000, openFrom: 'carry', cashIn: 10000, cashOut: 3200, collected: 0, expected: 81800 });
 });
 
 test('レジ：閉店後・休みの日の補充は次の営業日の開店時の現金に入る', () => {
@@ -141,7 +141,7 @@ test('レジ：閉店後・休みの日の補充は次の営業日の開店時�
 
 test('レジ：その日に手で入れた開店時の現金が優先。前の締めがなければ「まだない」', () => {
   assert.deepEqual(registerCalc({ day: '2026-11-01', closings: [], moves: [], cashSales: 1000 }),
-    { openCash: null, openFrom: 'none', cashIn: 0, cashOut: 0, expected: 1000 });
+    { openCash: null, openFrom: 'none', cashIn: 0, cashOut: 0, collected: 0, expected: 1000 });
   const r = registerCalc({ day: '2026-11-01', closings: [{ bizDate: '2026-10-31', closedAt: 'x', countedCash: 1 }], moves: [], dayRow: { openCash: 30000 }, cashSales: 0 });
   assert.equal(r.openCash, 30000);
   assert.equal(r.openFrom, 'manual');

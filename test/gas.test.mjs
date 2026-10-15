@@ -9,6 +9,7 @@ function boot() {
   const env = loadGas(CODE);
   env.setNow('2026-10-20T20:00:00+09:00');
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   const out = env.logs.join('\n');
   const token = out.match(/共有トークン：(\w+)/)[1];
   const pin = out.match(/初期の暗証番号：(\d+)/)[1];
@@ -30,6 +31,7 @@ test('初期設定でタブ・トークン・暗証番号ができ、2回実行�
   assert.ok(!names.includes('シート1'));
   const settingsRows = env.ss.getSheetByName('設定').dump().length;
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   assert.equal(env.ss.getSheetByName('設定').dump().length, settingsRows);
   assert.equal(env.props.get('SHARED_TOKEN'), env.token);
   assert.match(env.pin, /^\d{4}$/);
@@ -334,7 +336,7 @@ test('月次：退店した組・仕入れ・固定費・人件費から出す�
   assert.equal(env.call('monthly', { month: '2026-11' }).code, 'need_mgr');
   const r = env.call('monthly', { mgrToken, month: '2026-11' });
   const m = r.summary;
-  assert.deepEqual([m.sales, m.guests, m.groups, m.cash, m.cashless, m.point], [47500, 11, 3, 42000, 1500, 4000]);
+  assert.deepEqual([m.sales, m.guests, m.groups, m.cash, m.cashless, m.point], [47500, 11, 3, 6000, 1500, 0]);
   assert.deepEqual([m.nomi, m.tanpin, m.event, m.eventGroups], [6000, 1500, 40000, 1]);
   assert.deepEqual([m.openDays, m.closedDays, m.zeroDays], [3, 1, ['2026-11-07']]);
   assert.deepEqual(m.purchases, { '飲食物': 5000, '備品': 0, 'その他': 1000 });
@@ -343,9 +345,9 @@ test('月次：退店した組・仕入れ・固定費・人件費から出す�
   assert.deepEqual(m.laborFixed, [{ name: '加奈', days: 2, hours: 11.5, transport: 2000, cost: 25000 }]);
   assert.deepEqual(m.laborOthers, { cost: 8000, count: 1, names: ['みか'] });
   assert.equal(m.laborTotal, 33000);
-  assert.equal(m.mgrFee, 200000); // 店長報酬（月額・設定の初期値）
-  assert.equal(m.expenses, 5000 + 1000 + 100000 + 33000 + 200000);
-  assert.equal(m.profit, 47500 - 339000);
+  assert.equal(m.mgrFee, 180000); // 店長報酬（月額・設定）
+  assert.equal(m.expenses, 5000 + 1000 + 100000 + 33000 + 180000);
+  assert.equal(m.profit, 47500 - 319000);
   assert.equal(m.normalDailyAvg, Math.round((47500 - 40000) / 3));
   assert.equal(m.laborRate, 69.5);
   assert.equal(m.costRate, 10.5);
@@ -366,8 +368,8 @@ test('月次：退店した組・仕入れ・固定費・人件費から出す�
   assert.equal(row('　飲食物'), 5000);
   assert.equal(row('　その他の内容'), '花');
   assert.equal(row('　家賃'), 100000);
-  assert.equal(row('店長報酬'), 200000);
-  assert.equal(row('差し引き'), -291500);
+  assert.equal(row('店長報酬'), 180000);
+  assert.equal(row('差し引き'), -271500);
   for (const gone of ['店休日', '売上0円の営業日', 'イベントの組数', '差し引き（店長報酬前）', '店長報酬（あとで）']) assert.ok(!vals.some(r => r[0] === gone), gone + 'は月次から消した');
   assert.ok(sh.protection);
 });

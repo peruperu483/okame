@@ -1,11 +1,11 @@
 // 店内：左に入店、右に店内の組（通常／イベントの2ページ）。
 // カードをタップすると、その卓が店内の欄いっぱいに広がる（左が追加、右が会計）
 import { h, put, toast, uuid, yen } from '../util.js';
-import { nowIso, fmtHM, timeOnBizDay } from '../bizday.js';
+import { nowIso, fmtHM, timeOnBizDay, addDays } from '../bizday.js';
 import {
   KIND_NOMI, KIND_TANPIN, KIND_EVENT, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT,
   nextNo, label, baseAmount, extrasTotal, total, paidTotal, remaining, overpaid, methodSums, receive,
-  timeState, timeText
+  timeState, timeText, liveExtras, livePays, markDeleted
 } from '../calc.js';
 import { openSheet, pickReason, stepper } from '../ui.js';
 
@@ -92,7 +92,7 @@ export function renderStore(root, app) {
     setTimeout(() => { st.busy = false; }, 700);
     const base = baseAmount(st.kind, st.size, S(), st.evAmount);
     const v = {
-      bizDate: day(), no: nextNo(st.all), name: st.name.trim(), people: st.size, kind: st.kind,
+      bizDate: day(), no: nextNo(st.all.filter(x => x.bizDate === day())), name: st.name.trim(), people: st.size, kind: st.kind,
       inAt: nowIso(), endAt, status: ST_IN, base, extras: [], pays: [], total: base, cash: 0, cashless: 0, point: 0,
       eventId: isEv ? st.evId : '', trial: app.isTrial(day())
     };
@@ -147,7 +147,8 @@ export function renderStore(root, app) {
   function metaLine(v) {
     const ex = extrasTotal(v);
     const amt = yen(total(v)) + (ex > 0 ? `（追加 ${yen(ex)}）` : '');
-    return v.kind === KIND_EVENT && v.endAt ? `${fmtHM(v.inAt)}〜${fmtHM(v.endAt)}　·　${amt}` : `入店 ${fmtHM(v.inAt)}　·　${amt}`;
+    const old = v.bizDate !== day() ? `${Number(v.bizDate.slice(5, 7))}/${Number(v.bizDate.slice(8, 10))}の組　·　` : ''; // 前の営業日に残った組
+    return old + (v.kind === KIND_EVENT && v.endAt ? `${fmtHM(v.inAt)}〜${fmtHM(v.endAt)}　·　${amt}` : `入店 ${fmtHM(v.inAt)}　·　${amt}`);
   }
 
   function card(v) {
@@ -217,6 +218,10 @@ export function renderStore(root, app) {
   async function liveVisit(v) {
     if (!panel || !st.det || st.openId !== v.id) return null;
     const cur = await app.store.getRow('visits', v.id);
+    if (cur && cur.status === ST_IN && !app.canEdit('visits', cur.bizDate)) { // 前の営業日の組は、バイトには直せない
+      toast('前の営業日の組は、店長モードで直せます', 'err');
+      return null;
+    }
     return cur && cur.status === ST_IN ? cur : null;
   }
 
@@ -233,7 +238,7 @@ export function renderStore(root, app) {
       class: 'input', type: 'number', inputmode: 'numeric', 'aria-label': '追加の金額', placeholder: '金額を入力', value: d.addAmt,
       oninput: e => { d.addAmt = e.target.value; }
     });
-    const extras = (v.extras || []).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
+    const extras = liveExtras(v).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
       h('span', { class: 'xlabel' }, x.type === EXTRA_EXT ? `${x.label}　${yen(x.amount)}` : yen(x.amount), d.editId === x.id ? '　← 直している' : ''),
       x.type === EXTRA_EXT ? null : h('button', { class: 'btn btn-xs', onclick: () => { d.editId = x.id; d.addAmt = String(x.amount); paintDetail(); } }, '直す'),
       h('button', { class: 'btn btn-xs danger', onclick: () => delExtra(v, x) }, '消す')));
@@ -259,7 +264,7 @@ export function renderStore(root, app) {
     const over = overpaid(v);
     const msgEl = h('div', { class: 'pay-msg ' + (d.bad || over ? 'bad' : 'good'), role: 'status' }, over ? `受け取り済みが合計より ${yen(over)} 多くなっています。受け取りを消して直してください。` : d.msg);
     msgEl.hidden = !(d.msg || over);
-    const pays = v.pays || [];
+    const pays = livePays(v);
     const payBox = h('div', { class: 'det-box' },
       h('h3', {}, '会計（割り勘・併用OK）'),
       h('div', { class: 'row-between' }, h('span', {}, '受け取り済み'), h('b', { class: 'num' }, yen(paidTotal(v)))),
@@ -303,7 +308,7 @@ export function renderStore(root, app) {
     const d = st.det, amt = Number(d.addAmt);
     if (!Number.isInteger(amt) || amt <= 0) return;
     if (!d.editId) return addExtra(v, amt);
-    const before = (v.extras || []).find(x => x.id === d.editId);
+    const before = liveExtras(v).find(x => x.id === d.editId);
     const extras = (v.extras || []).map(x => (x.id === d.editId ? { ...x, amount: amt } : x));
     d.editId = null;
     d.addAmt = '';
@@ -314,7 +319,7 @@ export function renderStore(root, app) {
     v = await liveVisit(v);
     if (!v) return;
     if (st.det.editId === x.id) { st.det.editId = null; st.det.addAmt = ''; }
-    await saveVisit(v, { extras: (v.extras || []).filter(y => y.id !== x.id) }, { type: x.type === EXTRA_EXT ? '延長を外す' : '追加を消す', reason: '', before: x });
+    await saveVisit(v, { extras: markDeleted(v.extras, x.id) }, { type: x.type === EXTRA_EXT ? '延長を外す' : '追加を消す', reason: '', before: x });
   }
 
   async function addExtension(v, x) {
@@ -348,7 +353,7 @@ export function renderStore(root, app) {
     v = await liveVisit(v);
     if (!v) return;
     st.det.msg = '';
-    await saveVisit(v, { pays: (v.pays || []).filter(x => x.id !== p.id) }, { type: '受け取りを消す', reason: '', before: p });
+    await saveVisit(v, { pays: markDeleted(v.pays, p.id) }, { type: '受け取りを消す', reason: '', before: p });
   }
 
   // --- 組を直す・入店を削除 ---
@@ -372,7 +377,7 @@ export function renderStore(root, app) {
             const reason = await pickReason(`${label(v)}の入店を削除`, S().deleteReasons, '削除しても記録は消えず、「操作履歴」に理由と一緒に残ります。');
             if (!reason) return;
             closeDetail();
-            await app.sync.save('visits', v.id, { status: ST_DEL }, { log: { type: '入店の削除', reason, before: pick(v, ['name', 'people', 'kind', 'base', 'extras', 'pays']) } });
+            await app.sync.save('visits', v.id, { status: ST_DEL }, { log: { type: '入店の削除', reason, before: { ...pick(v, ['name', 'people', 'kind', 'base']), extras: liveExtras(v), pays: livePays(v) } } });
             toast('入店を削除しました');
           }
         }, '入店を削除'),
@@ -399,7 +404,8 @@ export function renderStore(root, app) {
   root.append(h('section', { class: 'page store' }, h('div', { class: 'store-grid' }, entry, area)));
 
   async function load() {
-    st.all = await app.store.listRows('visits', day(), day());
+    st.all = await app.store.listRows('visits', addDays(day(), -3), day()); // 前の営業日に店内に残った組も出す（今日の組と、店内の組だけ）
+    st.all = st.all.filter(v => v.bizDate === day() || v.status === ST_IN);
     st.events = await app.store.listRows('events', day(), day());
     paintPanes();
     paintDetail();
@@ -408,8 +414,13 @@ export function renderStore(root, app) {
 
   const offChange = app.sync.onChange(t => { if (t === 'visits' || t === 'events') load(); });
   const timer = setInterval(() => { paintPanes(); if (panel && !document.activeElement?.matches('input')) paintDetail(); }, 15e3);
+  // ほかの端末（店長のスマホなど）の変更を取り込む。開きっぱなしの端末が古いままにならないように
+  const pullAll = () => Promise.all([app.sync.pull('visits', addDays(day(), -3), day()), app.sync.pull('events', day(), day())]).catch(() => {});
+  const pullTimer = setInterval(pullAll, 30e3);
+  const onVisible = () => { if (!document.hidden) pullAll(); };
+  document.addEventListener('visibilitychange', onVisible);
   paintEntry();
   load();
-  Promise.all([app.sync.pull('visits', day(), day()), app.sync.pull('events', day(), day())]).catch(() => {});
-  return () => { offChange(); clearInterval(timer); };
+  pullAll();
+  return () => { offChange(); clearInterval(timer); clearInterval(pullTimer); document.removeEventListener('visibilitychange', onVisible); };
 }

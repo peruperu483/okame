@@ -10,6 +10,7 @@ function boot(now = '2026-10-20T10:00:00+09:00') {
   const env = loadGas(CODE);
   env.setNow(now);
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   const out = env.logs.join('\n');
   const token = out.match(/共有トークン：(\w+)/)[1];
   const pin = out.match(/初期の暗証番号：(\d+)/)[1];
@@ -35,6 +36,7 @@ test('初期設定で自動の動き（トリガー）ができ、何度実行�
   assert.deepEqual([time.kind, time.day, time.hour, time.tz], ['time', 20, 9, 'Asia/Tokyo']);
   assert.equal(env.triggers.find(t => t.fn === 'handleSheetEdit').event, 'edit');
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit']);
 });
 

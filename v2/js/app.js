@@ -62,6 +62,9 @@ app.refreshSettings = async () => {
 };
 app.errorText = e => (e instanceof NetworkError ? '通信できませんでした。つながっているか確かめてください。' : e.message);
 
+// GASが、店長でない端末には返さない設定
+const MGR_ONLY_SETTINGS = ['managerFee', 'defaultWage'];
+
 let cleanup = null;
 let current = null;
 
@@ -87,10 +90,14 @@ function boot() {
   window.addEventListener('online', () => sync.flush());
   window.addEventListener('hashchange', route);
   auth.onChange(() => {
-    if (!auth.isMgr() && app.settings && 'managerFee' in app.settings) { // 店長だけが見られる設定は、ロックしたら端末から消す
-      delete app.settings.managerFee;
+    if (!auth.isMgr() && app.settings && MGR_ONLY_SETTINGS.some(k => k in app.settings)) { // 店長だけが見られる設定は、ロックしたら端末から消す
+      MGR_ONLY_SETTINGS.forEach(k => { delete app.settings[k]; });
       app.settingsAsMgr = false;
       store.kvSet('settings', app.settings);
+    }
+    if (auth.isMgr()) {
+      app.refreshSettings().catch(() => {}); // 店長だけの設定（店長報酬・時給の初期値）を、店長として読み直す
+      sync.retryFailed().catch(() => {}); // 店長の許可が切れて断られた分（2時間以上あとに届いた勤怠・仕入れなど）を、今の店長として送り直す
     }
     renderChrome();
     route();
@@ -111,6 +118,7 @@ function boot() {
   );
   renderChrome();
   route();
+  showHomeScreenTip();
   sync.refreshCounts();
   sync.flush();
   app.refreshSettings().catch(() => {});
@@ -278,7 +286,31 @@ function showSetup() {
   $('#app').replaceChildren(h('div', { class: 'center-page' },
     h('h1', {}, 'お香芽 業務アプリ'),
     h('p', {}, 'はじめに、この端末をスプシにつなぎます。スプシのメニュー「お香芽 → 共有トークンを表示」に出る文字を入れてください。'),
+    isMobileBrowser() && !isStandalone() ? h('div', { class: 'a2hs inline' }, h('b', {}, '先にホーム画面に置いてください'), h('p', {}, homeScreenText())) : null,
     input, btn, msg));
+}
+
+// ===== ホーム画面に置く案内（iPad・スマホで、ブラウザのタブのまま使うと、端末の保存が消えることがある）=====
+function isMobileBrowser() {
+  const ua = navigator.userAgent || '';
+  return /iPhone|iPad|Android/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); // iPadOSはMacと名乗る
+}
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+function homeScreenText() {
+  const ios = /iPhone|iPad|Macintosh/.test(navigator.userAgent || '');
+  return ios
+    ? 'ブラウザのタブのまま使うと、1週間ほど開かないと、端末の記録（送信待ち）と共有トークンが消えることがあります。Safariの共有ボタン →「ホーム画面に追加」して、ホーム画面のアイコンから開いてください。共有トークンは、ホーム画面のアイコンで開いてから入れます。'
+    : 'ブラウザのタブのまま使うと、端末の記録が消えることがあります。Chromeの︙ →「ホーム画面に追加」（または「アプリをインストール」）して、ホーム画面のアイコンから開いてください。共有トークンは、そのアイコンで開いてから入れます。';
+}
+async function showHomeScreenTip() {
+  if (!isMobileBrowser() || isStandalone()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if ((await store.kvGet('homeTipLater')) === today) return;
+  const bar = h('div', { class: 'a2hs', role: 'note' },
+    h('b', {}, 'ホーム画面に置いてください'),
+    h('p', {}, homeScreenText()),
+    h('button', { class: 'btn btn-sm', onclick: () => { store.kvSet('homeTipLater', today); bar.remove(); } }, '今日はあとで'));
+  document.body.append(bar);
 }
 
 function showMessage(title, body) {

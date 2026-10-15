@@ -10,6 +10,7 @@ function boot(now) {
   const env = loadGas(CODE);
   env.setNow(now);
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   const out = env.logs.join('\n');
   const token = out.match(/共有トークン：(\w+)/)[1];
   const pin = out.match(/初期の暗証番号：(\d+)/)[1];

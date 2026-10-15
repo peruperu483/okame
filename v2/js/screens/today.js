@@ -4,10 +4,10 @@ import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, addDays } from '../bizday.js';
 import {
   KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT,
-  label, payLabel, total, methodSums, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
+  label, payLabel, total, methodSums, livePays, markAllDeleted, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
 import { pickReason, seg } from '../ui.js';
-import { mountCountdown } from './common.js';
+import { fmtMD, mountCountdown } from './common.js';
 
 const KIND_KEY = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
 const METHOD_KEY = { '現金': 'cash', 'キャッシュレス': 'cashless', 'ポイント': 'point' };
@@ -18,23 +18,26 @@ const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
 
 export function renderToday(root, app) {
   const S = () => app.settings;
-  const day = () => app.bizDate();
+  const realDay = () => app.bizDate();
+  const day = () => st.date || realDay(); // st.date：前の営業日の閉店・精算を見ているときだけ入る
   const from = () => addDays(day(), -31); // 開店時の現金を引き継ぐために、前の締めを探す範囲
   const st = {
     visits: [], moves: [], closings: [], dayRow: null, staff: [],
+    date: null, stale: [], membersKey: null, lastKey: null,
     regForm: null, rOutKind: '買い出し', rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
     counted: '', members: null, last: null, closeMsg: ''
   };
 
+  const staleBox = h('div', { class: 'col-gap' });
   const top = h('div', { class: 'dash-top' });
   const breakdown = h('div', { class: 'dash-two' });
   const doneBox = h('section', { class: 'dcard' });
   const staffBox = h('section', { class: 'dcard' });
-  const cd = mountCountdown(app, day().slice(0, 7));
+  const cd = mountCountdown(app, realDay().slice(0, 7));
   const regBox = h('section', { class: 'dcard' });
   const closeBox = h('section', { class: 'dcard' });
   root.append(h('section', { class: 'page dash' },
-    top, cd.el, breakdown,
+    staleBox, top, cd.el, breakdown,
     h('div', { class: 'dash-bottom' }, h('div', { class: 'dash-side' }, staffBox, doneBox), h('div', { class: 'dash-side' }, regBox, closeBox))));
 
   // ===== 上の3枚 =====
@@ -43,7 +46,7 @@ export function renderToday(root, app) {
     const left = Math.max(0, target - sum.guests);
     put(top,
       h('div', { class: 'dcard hero' },
-        h('div', { class: 'hero-lab' }, '今日の売上（精算済み）'),
+        h('div', { class: 'hero-lab' }, st.date ? `${fmtMD(st.date)}の売上（精算済み）` : '今日の売上（精算済み）'),
         h('div', { class: 'hero-big num' }, yen(sum.sales)),
         h('div', { class: 'hero-sub' }, `${sum.groups}組・${sum.guests}名` + (sum.guests ? `　客単価 ${yen(sum.avg)}` : '')),
         h('div', { class: 'hero-note' }, '退店して精算が終わった分だけを足しています')),
@@ -71,6 +74,23 @@ export function renderToday(root, app) {
       h('section', { class: 'dcard' }, h('h2', {}, '種類'), rows(KINDS.map(k => [k, sum[KIND_KEY[k]]]), sum.sales)));
   }
 
+  // ===== 前の営業日の未締め・店内に残った組：気づけるように出して、その日を開いて閉店・精算できるようにする =====
+  function openDay(d) {
+    Object.assign(st, { date: d, counted: '', touched: false, members: null, last: null, membersKey: null, lastKey: null, membersTouched: false, lastTouched: false, regForm: null, closeMsg: '', rMsg: '' });
+    load();
+  }
+  function paintStale() {
+    if (st.date) {
+      return put(staleBox, h('div', { class: 'alert warn row-between', role: 'status' },
+        h('span', {}, `${fmtMD(st.date)}（前の営業日）を見ています。`),
+        h('button', { class: 'btn btn-sm', onclick: () => openDay(null) }, '今日に戻る')));
+    }
+    put(staleBox, st.stale.map(x => h('div', { class: 'alert warn row-between', role: 'alert' },
+      h('span', {}, `${fmtMD(x.date)}：` + [x.inStore ? `店内に${x.inStore}組残っています` : '', x.unclosed ? '閉店（レジ締め）がまだです' : ''].filter(Boolean).join('。')
+        + (app.canEdit('visits', x.date) ? '' : '（店長に知らせてください。店長モードで直せます）')),
+      h('button', { class: 'btn btn-sm', onclick: () => openDay(x.date) }, 'その日を開く'))));
+  }
+
   // ===== 今日の出勤：シフト（予定）。閉店で実績が入ったら実績。ラストの担当も =====
   function paintStaff() {
     const row = st.dayRow;
@@ -80,7 +100,7 @@ export function renderToday(root, app) {
     const ordered = [...names].sort((a, b) => (a === boss ? 0 : 1) - (b === boss ? 0 : 1));
     const last = row?.lastActual || row?.lastPlan || '';
     put(staffBox,
-      h('h2', {}, '今日の出勤'),
+      h('h2', {}, st.date ? `${fmtMD(st.date)}の出勤` : '今日の出勤'),
       row?.closed ? h('div', { class: 'muted2 pad' }, '今日は店休日です')
         : names.length ? [
           h('div', { class: 'staff-chips' }, ordered.map(nm => h('span', { class: 'staff-chip' + (nm === last ? ' last' : '') }, nm, nm === last ? h('small', {}, 'ラスト') : null))),
@@ -107,8 +127,8 @@ export function renderToday(root, app) {
   async function undo(v) {
     const reason = await pickReason(`${label(v)}を店内に戻す`, S().cancelReasons, '受け取った分は消えて、もう一度会計します。「操作履歴」に理由と一緒に残ります。');
     if (!reason) return;
-    await app.sync.save('visits', v.id, { status: ST_IN, outAt: '', pays: [], ...methodSums([]) },
-      { log: { type: '会計の取り消し', reason, before: { status: v.status, outAt: v.outAt, pays: v.pays, total: total(v) } } });
+    await app.sync.save('visits', v.id, { status: ST_IN, outAt: '', pays: markAllDeleted(v.pays), ...methodSums([]) },
+      { log: { type: '会計の取り消し', reason, before: { status: v.status, outAt: v.outAt, pays: livePays(v), total: total(v) } } });
     toast(`${label(v)}を店内に戻しました`);
   }
 
@@ -117,6 +137,7 @@ export function renderToday(root, app) {
     const mgr = app.auth.isMgr();
     const canEdit = app.canEdit('cashMoves', day());
     const today = st.moves.filter(m => m.bizDate === day() && m.status !== ST_DEL).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const carried = registerCalc({ day: day(), closings: st.closings, moves: st.moves, dayRow: st.dayRow, cashSales: 0 }).carried || [];
     const canCollect = mgr || S().staffCanCollect !== false; // バイトが回収を入れられるかは設定
     const pickBtns = (opts, cur, onPick) => opts.map(o => h('button', { class: 'btn pick' + (cur === o ? ' on' : ''), onclick: () => onPick(o) }, o));
     const amtInput = h('input', { class: 'input', type: 'number', inputmode: 'numeric', placeholder: '金額', value: st.rAmt, 'aria-label': st.regForm === 'out' ? '出す金額' : '入れる金額', oninput: e => { st.rAmt = e.target.value; } });
@@ -153,6 +174,12 @@ export function renderToday(root, app) {
         h('button', { class: 'btn pick' + (st.regForm === 'in' ? ' on' : ''), onclick: () => toggleForm('in') }, 'レジに入れる')) : null,
       form,
       st.rMsg ? h('div', { class: 'pay-msg ' + (st.rBad ? 'bad' : 'good'), role: 'status' }, st.rMsg) : null,
+      carried.length ? h('div', { class: 'small muted2' }, 'このあとの営業日に入れた分（開店時の現金に入っています）') : null,
+      carried.map(m => h('div', { class: 'mrow' },
+        h('span', { class: 'num muted2 mtime' }, fmtMD(m.bizDate).slice(0, -3)),
+        h('span', { class: 'grow' }, moveLabel(m)),
+        h('b', { class: 'num ' + (m.type === MOVE_IN ? 'pos' : 'neg') }, (m.type === MOVE_IN ? '＋' : '−') + yen(m.amount)),
+        app.canEdit('cashMoves', m.bizDate) ? h('button', { class: 'btn btn-xs danger', onclick: () => delMove(m) }, '消す') : null)),
       today.map(m => h('div', { class: 'mrow' },
         h('span', { class: 'num muted2 mtime' }, fmtHM(m.at)),
         h('span', { class: 'grow' }, moveLabel(m)),
@@ -213,8 +240,10 @@ export function renderToday(root, app) {
         st.editOpen ? h('button', { class: 'btn btn-sm', onclick: () => { st.editOpen = false; paintAll(); } }, 'やめる') : null);
     }
     const memberNames = [...new Set([...(S().managerName ? [S().managerName] : []), ...st.staff.map(x => x.name), ...splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan)])];
-    if (st.members == null) st.members = new Set(splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan));
-    if (st.last == null) st.last = st.dayRow?.lastActual || st.dayRow?.lastPlan || '';
+    const memberKey = st.dayRow?.shiftActual || st.dayRow?.shiftPlan || '';
+    const lastKey = st.dayRow?.lastActual || st.dayRow?.lastPlan || '';
+    if (st.members == null || (!st.membersTouched && st.membersKey !== memberKey)) { st.members = new Set(splitNames(memberKey)); st.membersKey = memberKey; }
+    if (st.last == null || (!st.lastTouched && st.lastKey !== lastKey)) { st.last = lastKey; st.lastKey = lastKey; }
     const chosen = memberNames.filter(n => st.members.has(n));
     if (!chosen.includes(st.last)) st.last = '';
     const counted = st.counted;
@@ -241,11 +270,11 @@ export function renderToday(root, app) {
       (diffEl = diffLine(diff)),
       memberNames.length ? [h('div', { class: 'lab' }, '今日入った人'),
         h('div', { class: 'checks' }, memberNames.map(n => h('label', { class: 'check' },
-          h('input', { type: 'checkbox', checked: st.members.has(n), onchange: e => { e.target.checked ? st.members.add(n) : st.members.delete(n); paintAll(); } }),
+          h('input', { type: 'checkbox', checked: st.members.has(n), onchange: e => { st.membersTouched = true; e.target.checked ? st.members.add(n) : st.members.delete(n); paintAll(); } }),
           h('span', {}, n)))),
         st.dayRow?.shiftPlan ? h('div', { class: 'small muted2' }, `予定：${st.dayRow.shiftPlan}（違っていたら直してください）`) : null,
         h('div', { class: 'lab' }, 'ラストの担当'),
-        chosen.length ? seg(chosen, st.last, v => { st.last = v; }) : h('div', { class: 'small muted2' }, '入った人を選ぶと、ここで選べます。')] : null,
+        chosen.length ? seg(chosen, st.last, v => { st.last = v; st.lastTouched = true; }) : h('div', { class: 'small muted2' }, '入った人を選ぶと、ここで選べます。')] : null,
       canEdit ? h('button', { class: 'btn btn-primary btn-close', disabled: inStore.length > 0 || reg.openCash == null, onclick: () => doClose(sum, reg, closing) }, closing ? '締め直す' : '閉店する') : h('div', { class: 'small' }, '前の日の締めは、店長モードで直せます。'),
       st.closeMsg ? h('div', { class: 'pay-msg good', role: 'status' }, st.closeMsg) : null,
       closing && !st.closeMsg ? h('div', { class: 'small accent' }, `${fmtHM(closing.closedAt)}に閉店しました（数えた現金 ${yen(closing.countedCash)}・差額 ${signedYen(Number(closing.diff) || 0)}）`) : null,
@@ -286,6 +315,7 @@ export function renderToday(root, app) {
   // ===== 描く・読み込む =====
   function paintAll() {
     const sum = daySummary(st.visits.filter(v => v.status !== ST_DEL), S());
+    paintStale();
     paintTop(sum);
     paintBreakdown(sum);
     paintStaff();
@@ -295,9 +325,20 @@ export function renderToday(root, app) {
   }
 
   async function load() {
-    st.visits = await app.store.listRows('visits', day(), day());
-    st.moves = await app.store.listRows('cashMoves', from(), day());
-    st.closings = await app.store.listRows('closings', from(), day());
+    const real = realDay();
+    const recent = await app.store.listRows('visits', addDays(real, -3), real); // 前の営業日の未締めに気づくため、3日前から読む
+    st.visits = recent.filter(v => v.bizDate === day());
+    st.moves = await app.store.listRows('cashMoves', from(), real);
+    st.closings = await app.store.listRows('closings', from(), real);
+    st.stale = [];
+    for (let k = 1; k <= 3; k++) {
+      const d = addDays(real, -k);
+      const vs = recent.filter(v => v.bizDate === d && v.status !== ST_DEL);
+      if (!vs.length) continue;
+      const inStore = vs.filter(v => v.status === ST_IN).length;
+      const unclosed = vs.some(v => v.status === ST_OUT) && !st.closings.some(c => c.bizDate === d);
+      if (inStore || unclosed) st.stale.push({ date: d, inStore, unclosed });
+    }
     st.dayRow = await app.store.getRow('days', day());
     st.staff = (await app.store.listRows('staff')).filter(x => x.active !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     paintAll();
@@ -308,13 +349,16 @@ export function renderToday(root, app) {
     if (TABLES.includes(t)) load();
     if (['visits', 'closings', 'events'].includes(t)) cd.schedule(); // 売上・閉店・予定が変わったら、カウンターも読み直す
   });
-  const timer = setInterval(() => { if (!document.activeElement?.matches('input')) load(); }, 30e3);
-  const cdTimer = setInterval(() => cd.refresh(day().slice(0, 7)), 120e3);
+  const pullAll = () => Promise.all([
+    app.sync.pull('visits', addDays(realDay(), -3), realDay()), app.sync.pull('cashMoves', from(), realDay()),
+    app.sync.pull('closings', from(), realDay()), app.sync.pull('days', day(), day())
+  ]).catch(() => {});
+  const timer = setInterval(() => { pullAll(); if (!document.activeElement?.matches('input')) load(); }, 30e3); // ほかの端末の変更も30秒ごとに取り込む
+  const onVisible = () => { if (!document.hidden) pullAll(); };
+  document.addEventListener('visibilitychange', onVisible);
+  const cdTimer = setInterval(() => cd.refresh(realDay().slice(0, 7)), 120e3);
   cd.refresh();
   load();
-  Promise.all([
-    app.sync.pull('visits', day(), day()), app.sync.pull('cashMoves', from(), day()),
-    app.sync.pull('closings', from(), day()), app.sync.pull('days', day(), day())
-  ]).catch(() => {});
-  return () => { offChange(); clearInterval(timer); clearInterval(cdTimer); cd.destroy(); };
+  pullAll();
+  return () => { offChange(); clearInterval(timer); clearInterval(cdTimer); cd.destroy(); document.removeEventListener('visibilitychange', onVisible); };
 }

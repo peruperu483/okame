@@ -27,7 +27,9 @@ export function createSync({ store, post, getDeviceId, getMgrToken }) {
     const cur = await store.getRow(table, id);
     const row = { ...(cur || {}), ...patch, id, createdAt: cur?.createdAt || now, updatedAt: now, deviceId: getDeviceId() };
     await store.putRow(table, row);
-    await store.outboxAdd({ opId: uuid(), table, id, data: row, mgrToken: getMgrToken(), at: now });
+    // GASには、変えた項目だけを送る。行まるごとだと、ほかの端末が先に直した項目を、古い値で上書きしてしまう（新しい行は全部送る）
+    const data = cur ? { ...patch, id, updatedAt: now, deviceId: getDeviceId() } : row;
+    await store.outboxAdd({ opId: uuid(), table, id, data, mgrToken: getMgrToken(), at: now });
     if (log) {
       const entry = { id: uuid(), at: now, table, targetId: id, deviceId: getDeviceId(), ...log };
       await store.outboxAdd({ opId: entry.id, table: 'log', id: entry.id, data: entry, mgrToken: getMgrToken(), at: now });
@@ -55,7 +57,7 @@ export function createSync({ store, post, getDeviceId, getMgrToken }) {
         const group = ops.filter(o => (o.mgrToken || null) === token);
         const res = await post('sync', {
           mgrToken: token || getMgrToken(),
-          ops: group.map(({ opId, table, id, data }) => ({ opId, table, id, data }))
+          ops: group.map(({ opId, table, id, data, at }) => ({ opId, table, id, data, at }))
         });
         const byOp = new Map(res.results.map(r => [r.opId, r]));
         const done = [];
@@ -64,7 +66,7 @@ export function createSync({ store, post, getDeviceId, getMgrToken }) {
           const r = byOp.get(op.opId);
           if (!r) continue;
           if (r.ok) {
-            if (r.stale && r.current) { await store.putRow(op.table, r.current); touched.add(op.table); }
+            if (r.current) { await store.putRow(op.table, r.current); touched.add(op.table); } // 古い操作だった・ほかの端末の分と合わさった：合わせた結果を端末の写しにする
             done.push(op.seq);
           } else if (PERMANENT.has(r.code)) {
             await store.failedAdd({ ...op, code: r.code, failedAt: nowIso() });

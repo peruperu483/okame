@@ -41,6 +41,7 @@ function boot() {
   const env = loadGas(CODE);
   env.setNow('2026-11-05T20:00:00+09:00');
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   const out = env.logs.join('\n');
   const token = out.match(/共有トークン：(\w+)/)[1];
   const pin = out.match(/初期の暗証番号：(\d+)/)[1];
@@ -66,7 +67,7 @@ test('GAS：回収は仕入れに入らない。出金（買い出し）は入�
   // 月次には回収が出ない（支出にも数えない）
   const s = env.call('monthly', { mgrToken, month: '2026-11' }).summary;
   assert.equal(s.purchaseTotal, 0);
-  assert.equal(s.expenses, 200000); // 店長報酬だけ
+  assert.equal(s.expenses, 180000); // 店長報酬だけ
 });
 
 test('GAS：閉店の締めに回収が残る（「回収」の列）', () => {

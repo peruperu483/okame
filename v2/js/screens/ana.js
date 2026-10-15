@@ -68,7 +68,8 @@ export function renderAna(root, app) {
     const upto = s.legacy ? Number((String(s.importedUntil || '').split('〜').pop() || '').slice(8, 10)) : Number(today.slice(8, 10));
     const partial = thisMonth && upto > 0 && upto < Number(monthRange(st.month)[1].slice(8, 10));
     const payItems = [['現金', s.cash], ['キャッシュレス', s.cashless], ['ポイント', s.point]];
-    if (s.legacy && s.event) payItems.push(['団体（支払い方法の記録なし）', s.event]); // 管理シートの団体売上は、支払い方法が分からない
+    // 管理シートの団体売上は、支払い方法が分からない。アプリの月も、管理シートの形（月のタブ・突き合わせ）にそろえて、イベントは別に数える
+    if (s.event) payItems.push([s.legacy ? '団体（支払い方法の記録なし）' : 'イベント（上の3つには含めません）', s.event]);
     const payWhole = payItems.reduce((a, [, v]) => a + v, 0);
     put(body,
       s.legacy ? h('div', { class: 'note' }, 'この月は、管理シートから取り込んだ数字です（「過去の月次」タブ）。') : null,
@@ -93,7 +94,7 @@ export function renderAna(root, app) {
           partial ? h('div', { class: 'small warn' }, `${upto}日までの売上。固定費と店長報酬は1か月分`) : null)),
       h('div', { class: 'dash-two' },
         h('section', { class: 'dcard' }, h('h2', {}, '支払い方法'),
-          s.legacy ? h('div', { class: 'small muted2' }, '割合は、売上全体に対するものです。') : null,
+          h('div', { class: 'small muted2' }, '割合は、売上全体に対するものです。' + (s.legacy ? '' : 'イベントの支払い方法は、今日の画面で見られます。')),
           bars(payItems, payWhole)),
         h('section', { class: 'dcard' }, h('h2', {}, '種類'), s.legacy ? h('div', { class: 'small muted2' }, '管理シートには種類の内訳がありません（イベントのみ）。') : null,
           bars(KINDS.map(k => [k, s[{ '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' }[k]]]), s.sales))),

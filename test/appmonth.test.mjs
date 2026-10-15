@@ -10,6 +10,7 @@ function boot(now) {
   const env = loadGas(CODE);
   env.setNow(now);
   env.gas.setup();
+  env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
   const out = env.logs.join('\n');
   const token = out.match(/共有トークン：(\w+)/)[1];
   const pin = out.match(/初期の暗証番号：(\d+)/)[1];
@@ -19,14 +20,14 @@ function boot(now) {
 }
 const plain = v => JSON.parse(JSON.stringify(v));
 
-test('店長報酬：設定（初期値20万円）を支出に入れ、差し引きは1本。バイトには設定を返さない', () => {
+test('店長報酬：設定の金額を支出に入れ、差し引きは1本。バイトには設定を返さない', () => {
   const env = boot('2026-11-30T20:00:00+09:00');
   // バイト（店長モードでない）には、店長報酬を返さない
   assert.equal('managerFee' in env.call('bootstrap').settings, false);
   const mgrToken = env.login();
-  assert.equal(env.call('bootstrap', { mgrToken }).settings.managerFee, 200000);
+  assert.equal(env.call('bootstrap', { mgrToken }).settings.managerFee, 180000);
   const s = env.call('monthly', { mgrToken, month: '2026-11' }).summary;
-  assert.deepEqual([s.mgrFee, s.expenses, s.profit], [200000, 200000, -200000]);
+  assert.deepEqual([s.mgrFee, s.expenses, s.profit], [180000, 180000, -180000]);
   // 設定から変えられる（店長だけ）
   assert.equal(env.call('saveSettings', { settings: { managerFee: 1 } }).code, 'need_mgr');
   const saved = env.call('saveSettings', { mgrToken, settings: { managerFee: 250000 } });
@@ -42,19 +43,19 @@ test('店長報酬：過去の月次（9月・10月）にも同じく引いて�
   const sh = env.ss.insertSheet('過去の月次');
   sh.getRange(1, 1, 6, 3).setNumberFormats(Array.from({ length: 6 }, () => ['@', '@', '@']));
   sh.getRange(1, 1, 6, 3).setValues([
-    ['項目', '2026-09', '2026-10'], ['売上', 927750, 900000], ['飲食物', 158478, 100000], ['固定費：家賃電気', 220000, 220000],
-    ['人件費（加奈）', 100000, 90000], ['人件費（その他）', 69000, 10000]
+    ['項目', '2026-09', '2026-10'], ['売上', 880000, 900000], ['飲食物', 150000, 100000], ['固定費：家賃電気', 210000, 210000],
+    ['人件費（加奈）', 100000, 90000], ['人件費（その他）', 60000, 10000]
   ]);
   const s9 = env.call('monthly', { mgrToken, month: '2026-09' }).summary;
-  assert.deepEqual([s9.legacy, s9.mgrFee, s9.expenses, s9.profit], [true, 200000, 158478 + 220000 + 169000 + 200000, 927750 - 747478]);
+  assert.deepEqual([s9.legacy, s9.mgrFee, s9.expenses, s9.profit], [true, 180000, 150000 + 210000 + 160000 + 180000, 880000 - 700000]);
   env.call('buildMonthlySheet', { mgrToken });
   const m = env.ss.getSheetByName('月次');
   const vals = m.getRange(1, 1, m.getLastRow(), m.getLastColumn()).getValues();
   const labels = vals.map(r => r[0]);
   assert.ok(labels.indexOf('店長報酬') > labels.indexOf('人件費') && labels.indexOf('店長報酬') < labels.indexOf('支出'));
   assert.equal(labels[labels.indexOf('支出') + 1], '差し引き');
-  assert.equal(vals[labels.indexOf('差し引き')][1], 927750 - 747478);
-  assert.equal(vals[labels.indexOf('店長報酬')][1], 200000);
+  assert.equal(vals[labels.indexOf('差し引き')][1], 880000 - 700000);
+  assert.equal(vals[labels.indexOf('店長報酬')][1], 180000);
 });
 
 test('11月以降の月のタブ：閉店のたびに、その月のタブだけを作り直す', () => {
@@ -72,7 +73,7 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
     ['attendance', 'a2', { bizDate: '2026-11-02', name: 'みか', kind: '手打ち', cost: 8000, status: '有効' }],
     ['days', '2026-11-02', { bizDate: '2026-11-02', shiftActual: '加奈、岡本' }],
     ['days', '2026-11-04', { bizDate: '2026-11-04', closed: true }],
-    ['fixedCosts', '2026-11|家賃電気', { month: '2026-11', item: '家賃電気', amount: 220000 }],
+    ['fixedCosts', '2026-11|家賃電気', { month: '2026-11', item: '家賃電気', amount: 210000 }],
     ['closings', '2026-11-02', { bizDate: '2026-11-02', countedCash: 50000 }]
   ]);
   const names = env.sheets.map(s => s.name);
@@ -83,7 +84,7 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
   let g = grid();
   assert.equal(g[0][0], '11月');
   assert.deepEqual(g[1].slice(0, 2), [1, '日']); // 11/1（日曜）：記録はないが、運用開始日以降の今日までの行は0円で出る
-  assert.equal(g[1][16], 220000); // 固定費は月の1日の行
+  assert.equal(g[1][16], 210000); // 固定費は月の1日の行
   const d2 = g[2];
   assert.deepEqual(d2.slice(0, 7), [2, '月', '岡本', '加奈', '', '', '日本酒の会']); // シフトは岡本が先
   assert.deepEqual(d2.slice(8, 16), [10000, 8000, 7000, 40000, 0, 5000, 700, 2000]); // 加奈・スタッフ・現金・団体・ポイント・食品・その他・キャッシュレス

@@ -43,15 +43,26 @@ export function baseAmount(kind, people, s, eventAmount = 0) {
   return 0;
 }
 
-export const extrasTotal = v => (v.extras || []).reduce((a, x) => a + n(x.amount), 0);
+/**
+ * 追加（extras）と受け取り（pays）は、1件ごとにIDを持つ。消すときは配列から外さず、del の印を付ける
+ * （GASは2台からの送信をIDごとに合わせるので、外すと、もう片方の端末の古い写しで復活してしまうため）
+ */
+export const live = arr => (arr || []).filter(x => x && !x.del);
+export const liveExtras = v => live(v.extras);
+export const livePays = v => live(v.pays);
+/** 消す：印を付けた新しい配列 */
+export const markDeleted = (arr, id) => (arr || []).map(x => (x.id === id ? { ...x, del: true } : x));
+export const markAllDeleted = arr => (arr || []).map(x => ({ ...x, del: true }));
+
+export const extrasTotal = v => liveExtras(v).reduce((a, x) => a + n(x.amount), 0);
 export const total = v => n(v.base) + extrasTotal(v);
-export const paidTotal = v => (v.pays || []).reduce((a, p) => a + n(p.amount), 0);
+export const paidTotal = v => livePays(v).reduce((a, p) => a + n(p.amount), 0);
 export const remaining = v => Math.max(0, total(v) - paidTotal(v));
 export const overpaid = v => Math.max(0, paidTotal(v) - total(v));
 
 /** 受け取りを支払い方法ごとに足す（スプシの列 現金・キャッシュレス・ポイント） */
 export function methodSums(pays) {
-  const sum = m => (pays || []).filter(p => p.method === m).reduce((a, p) => a + n(p.amount), 0);
+  const sum = m => live(pays).filter(p => p.method === m).reduce((a, p) => a + n(p.amount), 0);
   return { cash: sum('現金'), cashless: sum('キャッシュレス'), point: sum('ポイント') };
 }
 
@@ -75,13 +86,13 @@ export function receive(v, method, input) {
 
 /** 精算済みの組の支払いの表示：「キャッシュレス ¥7,000 ＋ 現金 ¥3,500」 */
 export function payLabel(v) {
-  const pays = v.pays || [];
+  const pays = livePays(v);
   return pays.length ? pays.map(p => `${p.method} ${yen(p.amount)}`).join(' ＋ ') : '0円';
 }
 
 /** 飲み放題の時間（延長を足した合計・分） */
 export function nomiMinutes(v, s) {
-  return n(s.nomiMinutes) + (v.extras || []).filter(x => x.type === EXTRA_EXT).reduce((a, x) => a + n(x.minutes), 0);
+  return n(s.nomiMinutes) + liveExtras(v).filter(x => x.type === EXTRA_EXT).reduce((a, x) => a + n(x.minutes), 0);
 }
 
 /**
@@ -166,7 +177,7 @@ export function validateMove({ type, amount, category, note }) {
  */
 export function registerCalc({ day, closings, moves, dayRow, cashSales, until }) {
   const act = active(moves);
-  let openCash = null, openFrom = 'none';
+  let openCash = null, openFrom = 'none', carried = [];
   if (dayRow && dayRow.openCash !== '' && dayRow.openCash != null) {
     openCash = n(dayRow.openCash);
     openFrom = 'manual';
@@ -175,6 +186,7 @@ export function registerCalc({ day, closings, moves, dayRow, cashSales, until })
       .sort((a, b) => b.bizDate.localeCompare(a.bizDate))[0];
     if (prev) {
       const after = act.filter(m => (m.bizDate > prev.bizDate && m.bizDate < day) || (m.bizDate === prev.bizDate && String(m.at) > String(prev.closedAt)));
+      carried = after; // 前の締めのあとに入れた分（閉店後・休みの日の入金・回収など）。開店時の現金に入っている
       openCash = n(prev.countedCash) + after.reduce((a, m) => a + signed(m), 0);
       openFrom = 'carry';
     }
@@ -183,7 +195,7 @@ export function registerCalc({ day, closings, moves, dayRow, cashSales, until })
   const cashIn = today.filter(m => m.type === MOVE_IN).reduce((a, m) => a + n(m.amount), 0);
   const cashOut = today.filter(m => m.type === MOVE_OUT).reduce((a, m) => a + n(m.amount), 0);
   const collected = today.filter(m => m.type === MOVE_COLLECT).reduce((a, m) => a + n(m.amount), 0);
-  return { openCash, openFrom, cashIn, cashOut, collected, expected: n(openCash) + n(cashSales) + cashIn - cashOut - collected };
+  return { openCash, openFrom, carried, cashIn, cashOut, collected, expected: n(openCash) + n(cashSales) + cashIn - cashOut - collected };
 }
 
 /** 締めたあとに会計が変わったか */

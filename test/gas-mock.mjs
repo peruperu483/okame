@@ -284,7 +284,13 @@ export function loadGas(file) {
   const post = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
   // GASの「今」を決める（テストを日付に左右されないように）
   const setNow = iso => { ctx.now_ = () => new Date(iso); };
-  return { gas: ctx, ss, sheets, props, cache, logs, post, setNow, triggers };
+  // テスト用：設定タブの値を直接書く（操作履歴には残さない）。初期値に金額を持たないので、金額が要るテストが使う
+  const setSetting = (key, value) => {
+    const sh = ss.getSheetByName('設定');
+    const hit = ctx.readSettingsRows_(sh).map[key];
+    sh.getRange(hit.row, 3).setValue(JSON.stringify(value));
+  };
+  return { gas: ctx, ss, sheets, props, cache, logs, post, setNow, triggers, setSetting };
 }
 
 /** 別のスプレッドシート（管理シートなど）のまね。tabs = { タブ名: 2次元の値 } */

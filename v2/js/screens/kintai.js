@@ -14,7 +14,7 @@ export function renderKintai(root, app) {
   const today = app.bizDate();
   // staffId：固定のスタッフのID／'other'＝その他（手打ち）／undefined＝まだ選んでいない（最初の人を選ぶ）
   const blank = () => ({ date: today, staffId: undefined, hours: 6, trans: false, name: '', amount: '' });
-  const st = { month: today.slice(0, 7), rows: [], staff: [], f: blank(), editId: null, msg: '', bad: false, showAdd: false, ns: { name: '', wage: String(app.settings.defaultWage || 2000), trans: '' } };
+  const st = { month: today.slice(0, 7), rows: [], staff: [], f: blank(), editId: null, msg: '', bad: false, showAdd: false, ns: { name: '', wage: String(app.settings.defaultWage || ''), trans: '' } };
   const form = h('section', { class: 'dcard' });
   const right = h('div', { class: 'col-gap' });
   const headBox = h('div');
@@ -84,7 +84,7 @@ export function renderKintai(root, app) {
           if (st.staff.some(x => x.name === name)) { Object.assign(st, { msg: '同じ名前の人がいます', bad: true }); return paintForm(); }
           const id = uuid();
           // 保存すると画面が描き直されるので、選ぶ人とお知らせは先に決めておく
-          Object.assign(st, { showAdd: false, ns: { name: '', wage: String(app.settings.defaultWage || 2000), trans: '' }, msg: `${name} を固定のスタッフに追加しました（スプシでは単独の行になります）`, bad: false });
+          Object.assign(st, { showAdd: false, ns: { name: '', wage: String(app.settings.defaultWage || ''), trans: '' }, msg: `${name} を固定のスタッフに追加しました（スプシでは単独の行になります）`, bad: false });
           st.f.staffId = id;
           await app.sync.save('staff', id, { name, wage, transport: Number(ns.trans) || 0, active: true, order: st.staff.length + 1 });
         }

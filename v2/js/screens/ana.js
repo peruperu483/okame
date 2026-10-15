@@ -24,7 +24,7 @@ export function renderAna(root, app) {
       seg(['月次', '傾向'], st.tab, t => { st.tab = t; paintHead(); st.tab === '月次' ? loadMonthly() : loadTrend(); }),
       h('span', { class: 'grow' }),
       st.tab === '月次'
-        ? monthNav(st.month, m => { st.month = m; loadMonthly(); }, { max: today.slice(0, 7) })
+        ? monthNav(st.month, m => { st.month = m; paintHead(); loadMonthly(); }, { max: today.slice(0, 7) })
         : seg(['今日', '今週', '今月', '指定'], st.period, p => { st.period = p; setPeriod(); paintHead(); loadTrend(); }));
     if (st.tab === '傾向' && st.period === '指定') {
       head.append(h('div', { class: 'inline-add range' },
@@ -52,27 +52,38 @@ export function renderAna(root, app) {
       h('div', { class: 'brow-top' }, h('span', { class: 'grow' }, k), h('span', { class: 'pct' }, pct(v, whole) + '%'), h('b', { class: 'num amt' }, yen(v))),
       h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: pct(v, whole) + '%' } }))));
     const t = s.target;
+    const noGuests = s.legacy || p.legacy; // 管理シートの月には来客数・組数の記録がない
+    // 月の途中：売上はその日まで、固定費と店長報酬は1か月分
+    const thisMonth = st.month === today.slice(0, 7);
+    const upto = s.legacy ? Number((String(s.importedUntil || '').split('〜').pop() || '').slice(8, 10)) : Number(today.slice(8, 10));
+    const partial = thisMonth && upto > 0 && upto < Number(monthRange(st.month)[1].slice(8, 10));
+    const payItems = [['現金', s.cash], ['キャッシュレス', s.cashless], ['ポイント', s.point]];
+    if (s.legacy && s.event) payItems.push(['団体（支払い方法の記録なし）', s.event]); // 管理シートの団体売上は、支払い方法が分からない
+    const payWhole = payItems.reduce((a, [, v]) => a + v, 0);
     put(body,
       s.legacy ? h('div', { class: 'note' }, 'この月は、管理シートから取り込んだ数字です（「過去の月次」タブ）。') : null,
       h('div', { class: 'dash-top' },
         h('div', { class: 'dcard hero' },
           h('div', { class: 'hero-lab' }, `${monthLabel(s.month)}の売上`),
           h('div', { class: 'hero-big num' }, yen(s.sales)),
-          h('div', { class: 'hero-sub' }, `${s.groups}組・${s.guests}名` + (s.guests ? `　客単価 ${yen(s.avgPerGuest)}` : '')),
+          h('div', { class: 'hero-sub' }, s.legacy ? '来客数・組数：記録なし' : `${s.groups}組・${s.guests}名` + (s.guests ? `　客単価 ${yen(s.avgPerGuest)}` : '')),
           h('div', { class: 'hero-note' }, `前月比 ${signedPct(s.sales, p.sales)}（前月 ${yen(p.sales)}）`)),
         h('div', { class: 'dcard' },
           h('div', { class: 'lab' }, '目標'),
           t.monthlySales ? [h('div', { class: 'small' }, `月の売上 ${yen(t.monthlySales)} の ${t.salesRate}%`),
             h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: Math.min(100, t.salesRate) + '%' } }))] : null,
-          h('div', { class: 'small' }, `1日の来客 平均 ${t.avgGuestsPerDay}名（目標 ${t.dailyGuests}名）`),
+          h('div', { class: 'small' }, s.legacy ? `1日の来客：記録なし（目標 ${t.dailyGuests}名）` : `1日の来客 平均 ${t.avgGuestsPerDay}名（目標 ${t.dailyGuests}名）`),
           h('div', { class: 'small' }, `団体・イベント ${t.events}組` + (t.monthlyEvents ? `（目標 ${t.monthlyEvents}件）` : '') + (s.plannedEvents ? `・予定 ${s.plannedEvents}件` : ''))),
         h('div', { class: 'dcard' },
           h('div', { class: 'lab' }, '差し引き'),
           h('div', { class: 'big30 num ' + (s.profit < 0 ? 'neg' : '') }, s.profit == null ? 'GASを0.7.0に' : yen(s.profit)), // 古いGASのときは、貼り替えを促す
           h('div', { class: 'small muted2' }, `売上 ${yen(s.sales)} − 支出 ${yen(s.expenses)}`),
-          h('div', { class: 'small muted2' }, '支出に店長報酬を含みます'))),
+          h('div', { class: 'small muted2' }, '支出に店長報酬を含みます'),
+          partial ? h('div', { class: 'small warn' }, `${upto}日までの売上。固定費と店長報酬は1か月分`) : null)),
       h('div', { class: 'dash-two' },
-        h('section', { class: 'dcard' }, h('h2', {}, '支払い方法'), bars([['現金', s.cash], ['キャッシュレス', s.cashless], ['ポイント', s.point]], s.cash + s.cashless + s.point)),
+        h('section', { class: 'dcard' }, h('h2', {}, '支払い方法'),
+          s.legacy ? h('div', { class: 'small muted2' }, '割合は、売上全体に対するものです。') : null,
+          bars(payItems, payWhole)),
         h('section', { class: 'dcard' }, h('h2', {}, '種類'), s.legacy ? h('div', { class: 'small muted2' }, '管理シートには種類の内訳がありません（イベントのみ）。') : null,
           bars(KINDS.map(k => [k, s[{ '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' }[k]]]), s.sales))),
       h('div', { class: 'dash-two' },
@@ -91,7 +102,7 @@ export function renderAna(root, app) {
           row('原価率（飲食物）', s.costRate + '%'),
           row('通常営業の1日平均（イベントを除く）', yen(s.normalDailyAvg)),
           row('営業日数', s.openDays + '日'),
-          row('前月比（来客）', signedPct(s.guests, p.guests)))),
+          row('前月比（来客）', noGuests ? '記録なし' : signedPct(s.guests, p.guests)))),
       h('div', { class: 'row-between' },
         h('span', { class: 'small muted2' }, '運用開始日より前（試運転）の記録は数えていません。'),
         h('button', {

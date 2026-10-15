@@ -503,3 +503,5 @@ button { cursor: pointer; }
   .cal-tag, .cal-shift, .cal-more { display: none; }
   .cal-cell.closed .cal-d::after { content: '休'; font-size: 10px; margin-left: 2px; }
 }
+
+.small.warn { color: var(--warn); font-weight: 600; }

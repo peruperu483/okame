@@ -18,7 +18,7 @@ function boot(now = '2026-10-20T10:00:00+09:00') {
   return { ...env, token, pin, call, login };
 }
 const plain = v => JSON.parse(JSON.stringify(v));
-const grid = (env, name) => env.ss.getSheetByName(name).getRange(1, 1, 33, 19).getValues();
+const grid = (env, name) => env.ss.getSheetByName(name).getRange(1, 1, 33, 20).getValues();
 // スプシで打つ：値を入れてから、編集のトリガーを呼ぶ（本物は、打った範囲の e.range が渡る）
 function typeCells(env, name, row, col, rows2d) {
   const sh = env.ss.getSheetByName(name);
@@ -51,14 +51,15 @@ test('来月のタブ：日付・曜日・シフトの予定・ラスト・店�
   assert.equal(env.sheets.filter(s => s.name === '11月').length, 1);
   const g = grid(env, '11月');
   assert.deepEqual(g[0].slice(0, 2), ['11月', '列 1']);
-  assert.equal(g[0][18], 'ラスト');
+  assert.equal(g[0][19], 'ラスト');
+  assert.equal(g[0][7], '見込み');
   assert.deepEqual(g[1].slice(0, 2), [1, '日']); // 11/1（日曜）
   assert.deepEqual(g[3].slice(0, 7), [3, '火', '岡本', '加奈', '', '', '日本酒の会']); // 店長が先
-  assert.equal(g[3][18], '加奈'); // ラスト
+  assert.equal(g[3][19], '加奈'); // ラスト
   assert.deepEqual(g[4].slice(0, 3), [4, '水', '店休日']);
   assert.equal(g[3][7], ''); // 金額の列は空
-  assert.deepEqual(g[3].slice(7, 18), new Array(11).fill(''));
-  assert.deepEqual(g[2].slice(7, 18), new Array(11).fill(''));
+  assert.deepEqual(g[3].slice(7, 19), new Array(12).fill('')); // 見込み・金額の列
+  assert.deepEqual(g[2].slice(7, 19), new Array(12).fill(''));
   assert.equal(g[32][0], '合計');
   // タブの並び
   // 2回作っても1つ（中身だけ書き換える）
@@ -84,14 +85,18 @@ test('打てる範囲：シフト・団体及びイベント・ラストだけ�
   const sh = env.ss.getSheetByName('11月');
   assert.ok(sh.protection);
   const un = sh.protection.getUnprotectedRanges().map(r => [r.r, r.c, r.nr, r.nc]);
-  assert.deepEqual(plain(un), [[2, 3, 31, 5], [2, 19, 31, 1]]); // C〜G と S（2〜32行目）
+  assert.deepEqual(plain(un), [[2, 3, 31, 6], [2, 20, 31, 1]]); // C〜H（シフト・団体及びイベント・見込み）と T（ラスト）。2〜32行目
   // 金額の列（H〜R）と合計の行は、打てる範囲に入っていない
-  assert.ok(un.every(([r, c, nr, nc]) => !(c <= 8 && c + nc - 1 >= 8) && r + nr - 1 < 33));
-  const rule = sh.validations.get('2:3');
-  assert.deepEqual(plain(rule.list), ['岡本', '加奈', '店休日']); // 在籍していない人は出ない
-  assert.equal(rule.dropdown, true);
-  assert.deepEqual(plain(sh.validations.get('2:19').list), ['岡本', '加奈']);
-  assert.ok(sh.condRules.some(r => r.text === '岡本' && r.bg) && sh.condRules.some(r => r.text === '店休日'));
+  assert.ok(un.every(([r, c, nr, nc]) => !(c <= 9 && c + nc - 1 >= 9) && r + nr - 1 < 33)); // 加奈の列（I）などの金額と、合計の行は入らない
+  // プルダウン：列2・3・4は設定どおり、列5は店長とスタッフと店休日、ラストは店長とスタッフ（在籍していない人は出ない）
+  const list = k => plain(env.ss.getSheetByName('シフト表のひな形').validations.get(k).list);
+  assert.deepEqual([list('2:3'), list('2:4'), list('2:5')], [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']]);
+  assert.deepEqual(list('2:6'), ['岡本', '加奈', '店休日']);
+  assert.deepEqual(list('2:20'), ['岡本', '加奈']);
+  assert.equal(env.ss.getSheetByName('シフト表のひな形').validations.get('2:3').dropdown, true);
+  // 月のタブにも写っていて、条件つき書式の背景色は使わない
+  assert.deepEqual(plain(sh.validations.get('2:3').list), ['店休日', '岡本', '加奈']);
+  assert.equal(sh.condRules.length, 0);
 });
 
 test('スプシで打ったシフト・店休日・ラスト・イベントが、アプリの予定に入る', () => {
@@ -101,7 +106,7 @@ test('スプシで打ったシフト・店休日・ラスト・イベントが�
   // 11/5：シフト（岡本・加奈）。C=岡本 D=加奈
   typeCells(env, '11月', 6, 3, [['岡本', '加奈', '', '']]);
   // ラスト
-  typeCells(env, '11月', 6, 19, [['加奈']]);
+  typeCells(env, '11月', 6, 20, [['加奈']]);
   // 団体及びイベント
   typeCells(env, '11月', 6, 7, [['日本酒の会、貸切']]);
   // 11/6：店休日
@@ -159,16 +164,16 @@ test('アプリの予定を直すと、月のタブにも出る（どちらか�
   sync('days', '2026-11-11', { bizDate: '2026-11-11', closed: true });
   sync('events', 'e1', { date: '2026-11-12', type: '団体', title: '歓迎会', status: '有効' });
   let g = grid(env, '11月');
-  assert.deepEqual(g[10].slice(2, 7), ['岡本', '加奈', '', '', '']);
-  assert.equal(g[10][18], '岡本');
+  assert.deepEqual(g[10].slice(2, 8), ['岡本', '加奈', '', '', '', '']);
+  assert.equal(g[10][19], '岡本');
   assert.equal(g[11][2], '店休日');
   assert.equal(g[12][6], '歓迎会');
   // 金額の列は、予定を直しても触らない
-  env.ss.getSheetByName('11月').getRange(10, 10).setValue(777);
+  env.ss.getSheetByName('11月').getRange(10, 11).setValue(777);
   sync('days', '2026-11-10', { bizDate: '2026-11-10', shiftPlan: '加奈' });
   g = grid(env, '11月');
   assert.deepEqual(g[10].slice(2, 6), ['加奈', '', '', '']);
-  assert.equal(g[9][9], 777);
+  assert.equal(g[9][10], 777);
   // イベントを消す・日付を直す
   sync('events', 'e1', { status: '削除' });
   assert.equal(grid(env, '11月')[12][6], '');
@@ -197,9 +202,9 @@ test('シフトとラストは実績があれば実績。予定のイベント�
   ]);
   const g = grid(env, '11月');
   assert.deepEqual(g[2].slice(2, 6), ['岡本', '加奈', 'みか', '']); // 実績
-  assert.equal(g[2][18], '岡本'); // ラストの実績
+  assert.equal(g[2][19], '岡本'); // ラストの実績
   assert.equal(g[2][6], 'ユーワード懇親会、貸切、飛び込みの会'); // 予定の名前に1つにまとめる
-  assert.equal(g[2][10], 55000); // 団体売上（金額は閉店で入る）
+  assert.equal(g[2][11], 55000); // 団体売上（金額は閉店で入る）
   // 実績がなければ予定
   env.call('sync', { mgrToken, ops: [{ opId: 'x', table: 'days', id: '2026-11-03', data: { bizDate: '2026-11-03', shiftPlan: '加奈', lastPlan: '加奈' } }] });
   assert.deepEqual(grid(env, '11月')[3].slice(2, 6), ['加奈', '', '', '']);
@@ -225,11 +230,11 @@ test('9月・10月（管理シートから取り込んだ月）は、これま�
   assert.equal(env.ss.getSheetByName('10月').getRange(2, 16).getValue(), 250000);
 });
 
-test('店長の名前は設定で変えられ、シフトのプルダウンの先頭に出る', () => {
+test('店長の名前は設定で変えられ、列5のプルダウンの先頭に出る', () => {
   const env = boot();
   const mgrToken = env.login();
   assert.equal(env.call('bootstrap').settings.managerName, '岡本'); // バイトにも見える（名前は秘密ではない）
   env.call('saveSettings', { mgrToken, settings: { managerName: '店長さん' } });
   env.gas.createNextMonthTab_();
-  assert.deepEqual(plain(env.ss.getSheetByName('11月').validations.get('2:3').list), ['店長さん', '店休日']);
+  assert.deepEqual(plain(env.ss.getSheetByName('11月').validations.get('2:6').list), ['店長さん', '店休日']); // 列5
 });

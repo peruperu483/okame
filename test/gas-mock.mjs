@@ -69,7 +69,15 @@ class Range {
     this.sheet.bandings.push(b);
     return b;
   }
-  copyTo(target) {
+  copyTo(target, type) {
+    if (type) { // PASTE_DATA_VALIDATION：入力規則だけ
+      for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) {
+        const v = this.sheet.validations.get(this.sheet._key(this.r + i, this.c + j));
+        const k = target.sheet._key(target.r + i, target.c + j);
+        if (v) target.sheet.validations.set(k, v); else target.sheet.validations.delete(k);
+      }
+      return this;
+    }
     for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) {
       const v = this.sheet.cells.get(this.sheet._key(this.r + i, this.c + j));
       const k = target.sheet._key(target.r + i, target.c + j);
@@ -143,6 +151,25 @@ class Sheet {
   setFrozenColumns() {}
   getMaxColumns() { return this.maxCols; }
   insertColumnsAfter(after, n) { this.maxCols += n; }
+  insertColumnAfter(after) {
+    const colNum = ch => ch.charCodeAt(0) - 64;
+    const shiftFormula = v => (typeof v === 'string' && v[0] === '=')
+      ? v.replace(/([A-Z])(\d+)/g, (m, col, row) => (colNum(col) > after ? String.fromCharCode(col.charCodeAt(0) + 1) : col) + row) : v;
+    const shift = (map, fix) => {
+      const next = new Map();
+      for (const [k, v] of map) {
+        const [r, c] = k.split(':').map(Number);
+        next.set(this._key(r, c > after ? c + 1 : c), fix ? fix(v) : v);
+      }
+      return next;
+    };
+    this.cells = shift(this.cells, shiftFormula);
+    this.formats = shift(this.formats);
+    this.bgs = shift(this.bgs);
+    this.validations = shift(this.validations);
+    this.maxCols += 1;
+    return this;
+  }
   /** 行を消して、下の行を詰める（実物と同じく行数も減る） */
   deleteRows(start, n) {
     const move = (map) => {
@@ -205,7 +232,7 @@ export function loadGas(file) {
   };
   const ctx = {
     console: { log: m => logs.push(String(m)), error: m => logs.push('ERR ' + m) },
-    SpreadsheetApp: { getActive: () => ss, getUi: () => { throw new Error('UIなし'); }, ProtectionType: { SHEET: 'SHEET' }, BandingTheme: { LIGHT_GREY: 'LIGHT_GREY' }, BorderStyle: { SOLID: 'SOLID' },
+    SpreadsheetApp: { getActive: () => ss, getUi: () => { throw new Error('UIなし'); }, ProtectionType: { SHEET: 'SHEET' }, BandingTheme: { LIGHT_GREY: 'LIGHT_GREY' }, CopyPasteType: { PASTE_DATA_VALIDATION: 'PASTE_DATA_VALIDATION' }, BorderStyle: { SOLID: 'SOLID' },
       newDataValidation: () => {
         const b = { list: null, allowInvalid: false, requireValueInList(list, dropdown) { this.list = list; this.dropdown = dropdown; return this; },
           setAllowInvalid(v) { this.allowInvalid = v; return this; }, build() { return { list: this.list, dropdown: this.dropdown, allowInvalid: this.allowInvalid }; } };

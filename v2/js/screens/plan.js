@@ -5,7 +5,7 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { ST_DEL } from '../calc.js';
 import { openSheet, pickReason, seg } from '../ui.js';
-import { fmtMD, monthLabel, monthNav, monthRange, msgBox } from './common.js';
+import { fmtMD, monthLabel, monthNav, monthRange, msgBox, mountCountdown } from './common.js';
 
 const DOW = ['日', '月', '火', '水', '木', '金', '土'];
 const T_CLOSED = '店休日';
@@ -17,7 +17,32 @@ export function renderPlan(root, app) {
   const st = { month: today.slice(0, 7), view: 'cal', selected: today, events: [], days: [], requests: [], staff: [] };
   const head = h('div', { class: 'plan-head' });
   const body = h('div', { class: 'plan-body' });
-  root.append(h('section', { class: 'page plan' }, head, body));
+  const cd = mountCountdown(app, st.month);
+  const goalBox = h('div', { class: 'plan-goal' });
+  root.append(h('section', { class: 'page plan' }, head, goalBox, body));
+
+  // 月の売上目標（店長だけ打てる。月ごとに違う金額を入れられる）と、減算カウンター
+  function paintGoal() {
+    const mine = app.settings.monthlyTargets?.[st.month];
+    const input = h('input', { class: 'input num', type: 'number', inputmode: 'numeric', min: 0, placeholder: String(app.settings.targets?.monthlySales || ''), value: mine ? String(mine) : '', 'aria-label': `${monthLabel(st.month)}の売上目標` });
+    const save = async () => {
+      const v = input.value === '' ? 0 : Number(input.value);
+      if (!Number.isInteger(v) || v < 0) return toast('金額を入れてください', 'err');
+      try {
+        const r = await app.post('saveSettings', { settings: { monthlyTargets: { [st.month]: v } } });
+        app.settings = r.settings;
+        await app.store.kvSet('settings', r.settings);
+        toast(v ? `${monthLabel(st.month)}の売上目標を保存しました` : '目標を空にしました（設定の「月の売上」を使います）');
+        cd.refresh(st.month);
+        paintGoal();
+      } catch (e) { toast(app.errorText(e), 'err'); }
+    };
+    put(goalBox, cd.el,
+      app.auth.isMgr() ? h('div', { class: 'dcard goal-edit' },
+        h('div', { class: 'lab' }, `${monthLabel(st.month)}の売上目標（店長）`),
+        h('div', { class: 'inline-add' }, input, h('span', { class: 'unit' }, '円'), h('button', { class: 'btn btn-primary', onclick: save }, '保存')),
+        h('div', { class: 'small muted2' }, mine ? '月ごとに変えられます。空にすると、設定の「月の売上」になります。' : '入れていない月は、設定の「月の売上」を使います。')) : null);
+  }
 
   const live = arr => arr.filter(x => x.status !== ST_DEL);
   const eventsOn = d => live(st.events).filter(e => e.date === d).sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
@@ -34,6 +59,7 @@ export function renderPlan(root, app) {
       h('span', { class: 'grow' }),
       seg(['カレンダー', '一覧'], st.view === 'cal' ? 'カレンダー' : '一覧', v => { st.view = v === 'カレンダー' ? 'cal' : 'list'; paint(); }),
       h('button', { class: 'btn btn-primary', onclick: () => editItem({ date: st.selected >= today ? st.selected : today }) }, '予定を追加'));
+    paintGoal();
     put(body, st.view === 'cal' ? [calendar(), dayPanel(st.selected)] : list());
   }
 
@@ -159,7 +185,7 @@ export function renderPlan(root, app) {
         inp('内容', 'title', { placeholder: '例：日本酒の会・町内会' }),
         h('div', { class: 'grid2' }, inp('開始', 'startTime', { type: 'time' }), inp('終了', 'endTime', { type: 'time' })),
         inp('人数', 'people', { type: 'number', inputmode: 'numeric' }),
-        inp('見込みの金額', 'expectedAmount', { type: 'number', inputmode: 'numeric', placeholder: '団体の合計' }),
+        inp('売上見込み（円）', 'expectedAmount', { type: 'number', inputmode: 'numeric', placeholder: '団体の合計。月の目標の「あと」に入ります' }),
         showContact() ? [inp('幹事の名前', 'contactName'), inp('幹事の連絡先', 'contactInfo', { type: 'tel' })] : h('p', { class: 'help' }, '幹事の名前と連絡先は、店長だけが見て入れられます。'),
         inp('メモ', 'memo'));
     };
@@ -223,10 +249,12 @@ export function renderPlan(root, app) {
     st.requests = await app.store.listRows('requests', from, to);
     st.staff = (await app.store.listRows('staff')).filter(x => x.active !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     paint();
+    cd.refresh(st.month);
     Promise.all(['events', 'days', 'requests'].map(t => app.sync.pull(t, from, to))).catch(() => {});
   }
 
-  const off = app.sync.onChange(t => { if (['events', 'days', 'requests', 'staff'].includes(t)) reload(); });
+  const off0 = app.sync.onChange(t => { if (['events', 'days', 'requests', 'staff'].includes(t)) reload(); if (['events', 'closings', 'visits'].includes(t)) cd.schedule(); });
+  const off = () => { off0(); cd.destroy(); };
   async function reload() {
     const [from, to] = monthRange(st.month);
     st.events = await app.store.listRows('events', from, to);

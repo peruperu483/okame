@@ -505,3 +505,28 @@ button { cursor: pointer; }
 }
 
 .small.warn { color: var(--warn); font-weight: 600; }
+
+/* 月の売上目標の減算カウンター・今日の出勤 */
+.countdown { gap: 12px; }
+.countdown[hidden] { display: none; }
+.cd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cd-big { font-size: 36px; font-weight: 700; line-height: 1.1; }
+.cd-big.ok { color: var(--accent); }
+.cd-bar { display: flex; height: 12px; border-radius: 6px; background: #EDEDEA; overflow: hidden; }
+.cd-fill { background: var(--accent); }
+.cd-plan { background: repeating-linear-gradient(45deg, #9CBBAA, #9CBBAA 4px, #C9DCD0 4px, #C9DCD0 8px); }
+.cd-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.cd-cell { padding: 8px 10px; border-radius: 10px; background: var(--bg2); min-width: 0; }
+.cd-cell.rest { background: var(--accent); color: #fff; }
+.cd-k { font-size: 12px; opacity: .8; }
+.cd-v { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .cd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.staff-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.staff-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 22px; background: var(--bg2); font-weight: 600; }
+.staff-chip.last { background: var(--accent); color: #fff; }
+.staff-chip small { font-size: 11px; font-weight: 400; opacity: .9; }
+.plan-goal { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: stretch; margin-bottom: 12px; }
+@media (max-width: 900px) { .plan-goal { grid-template-columns: minmax(0, 1fr); } }
+.goal-edit .inline-add { align-items: center; }
+.target-row { gap: 8px; margin-bottom: 8px; }
+.tg-month { min-width: 110px; font-weight: 600; }

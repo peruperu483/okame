@@ -1,5 +1,6 @@
 // 設定画面。開くたびに店長の暗証番号（照合はGAS）。
-import { h, toast, uuid, yen } from '../util.js';
+import { h, put, toast, uuid, yen } from '../util.js';
+import { monthLabel } from './common.js';
 import { renderPinGate } from './pin.js';
 
 const STAFF_TABLES = [
@@ -102,12 +103,15 @@ function renderForm(root, app) {
     card('バイトに見せる範囲',
       h('p', { class: 'help' }, '今日・店内・予定はいつも見せます。分析とその他（勤怠・仕入れ・固定費・設定）は店長だけです。'),
       h('div', { class: 'vis' },
-        sw('予定の幹事の連絡先', () => v.eventContact, x => { v.eventContact = x; }))),
+        sw('予定の幹事の連絡先', () => v.eventContact, x => { v.eventContact = x; }),
+        sw('月の売上目標までの「あと」（今日の画面）', () => v.countdown !== false, x => { v.countdown = x; }))),
 
     card('目標',
-      num('月の売上', () => tg.monthlySales, x => { tg.monthlySales = x; }, '円'),
+      num('月の売上（月ごとの目標がない月に使う）', () => tg.monthlySales, x => { tg.monthlySales = x; }, '円'),
       num('1日の来客数', () => tg.dailyGuests, x => { tg.dailyGuests = x; }, '人'),
       num('団体・イベントの月の数', () => tg.monthlyEvents, x => { tg.monthlyEvents = x; }, '件')),
+
+    card('月ごとの売上目標', monthlyTargetsEditor(draft, dirty, app)),
 
     card('選ぶ項目',
       listEditor('仕入れの項目', draft, 'purchaseCategories', dirty),
@@ -137,6 +141,36 @@ function renderForm(root, app) {
     if (t.type === 'checkbox' && t.closest('.vis')) t.parentNode.querySelector('.switch-text').textContent = t.checked ? '見せる' : '見せない';
   });
   root.append(page);
+}
+
+// 月ごとの売上目標：月を選んで金額を入れる。ない月は「月の売上」を使う（0にすると、その月は決めていない扱い）
+function monthlyTargetsEditor(draft, dirty, app) {
+  draft.monthlyTargets = draft.monthlyTargets || {};
+  const box = h('div', { class: 'targets-ed' });
+  const nextMonth = new Date(Date.UTC(Number(app.bizDate().slice(0, 4)), Number(app.bizDate().slice(5, 7)), 1)).toISOString().slice(0, 7);
+  const add = { month: nextMonth, amount: '' };
+  const paint = () => {
+    const keys = Object.keys(draft.monthlyTargets).sort();
+    put(box,
+      h('p', { class: 'help' }, '月ごとに違う金額を入れられます。入れていない月は、上の「月の売上」を使います。0にすると、その月は決めていない扱いです。今日の画面の「あと」と、予定の画面の月の上に出ます。'),
+      keys.map(k => h('div', { class: 'with-unit target-row' },
+        h('span', { class: 'tg-month' }, monthLabel(k)),
+        h('input', { class: 'input num', type: 'number', inputmode: 'numeric', min: 0, value: String(draft.monthlyTargets[k] ?? ''),
+          oninput: e => { draft.monthlyTargets[k] = e.target.value === '' ? 0 : Number(e.target.value); dirty(); } }),
+        h('span', { class: 'unit' }, '円'))),
+      h('div', { class: 'with-unit target-row' },
+        h('input', { class: 'input', type: 'month', value: add.month, 'aria-label': '月', oninput: e => { add.month = e.target.value; } }),
+        h('input', { class: 'input num', type: 'number', inputmode: 'numeric', min: 0, placeholder: '金額', 'aria-label': '目標の金額', oninput: e => { add.amount = e.target.value; } }),
+        h('span', { class: 'unit' }, '円'),
+        h('button', { class: 'btn btn-sm', onclick: () => {
+          if (!/^\d{4}-\d{2}$/.test(add.month) || !(Number(add.amount) > 0)) return toast('月と金額を入れてください', 'err');
+          draft.monthlyTargets[add.month] = Number(add.amount);
+          add.amount = '';
+          paint(); dirty();
+        } }, '足す')));
+  };
+  paint();
+  return box;
 }
 
 function card(title, ...children) {

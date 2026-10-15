@@ -7,6 +7,7 @@ import {
   label, payLabel, total, methodSums, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
 import { pickReason, seg } from '../ui.js';
+import { mountCountdown } from './common.js';
 
 const KIND_KEY = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
 const METHOD_KEY = { '現金': 'cash', 'キャッシュレス': 'cashless', 'ポイント': 'point' };
@@ -28,11 +29,13 @@ export function renderToday(root, app) {
   const top = h('div', { class: 'dash-top' });
   const breakdown = h('div', { class: 'dash-two' });
   const doneBox = h('section', { class: 'dcard' });
+  const staffBox = h('section', { class: 'dcard' });
+  const cd = mountCountdown(app, day().slice(0, 7));
   const regBox = h('section', { class: 'dcard' });
   const closeBox = h('section', { class: 'dcard' });
   root.append(h('section', { class: 'page dash' },
-    top, breakdown,
-    h('div', { class: 'dash-bottom' }, doneBox, h('div', { class: 'dash-side' }, regBox, closeBox))));
+    top, cd.el, breakdown,
+    h('div', { class: 'dash-bottom' }, h('div', { class: 'dash-side' }, staffBox, doneBox), h('div', { class: 'dash-side' }, regBox, closeBox))));
 
   // ===== 上の3枚 =====
   function paintTop(sum) {
@@ -66,6 +69,23 @@ export function renderToday(root, app) {
     put(breakdown,
       h('section', { class: 'dcard' }, h('h2', {}, '支払い方法'), rows(METHODS.map(m => [m, sum[METHOD_KEY[m]]]), methodTotal)),
       h('section', { class: 'dcard' }, h('h2', {}, '種類'), rows(KINDS.map(k => [k, sum[KIND_KEY[k]]]), sum.sales)));
+  }
+
+  // ===== 今日の出勤：シフト（予定）。閉店で実績が入ったら実績。ラストの担当も =====
+  function paintStaff() {
+    const row = st.dayRow;
+    const actual = splitNames(row?.shiftActual), plan = splitNames(row?.shiftPlan);
+    const names = actual.length ? actual : plan;
+    const boss = S().managerName;
+    const ordered = [...names].sort((a, b) => (a === boss ? 0 : 1) - (b === boss ? 0 : 1));
+    const last = row?.lastActual || row?.lastPlan || '';
+    put(staffBox,
+      h('h2', {}, '今日の出勤'),
+      row?.closed ? h('div', { class: 'muted2 pad' }, '今日は店休日です')
+        : names.length ? [
+          h('div', { class: 'staff-chips' }, ordered.map(nm => h('span', { class: 'staff-chip' + (nm === last ? ' last' : '') }, nm, nm === last ? h('small', {}, 'ラスト') : null))),
+          h('div', { class: 'small muted2' }, (actual.length ? '実績（閉店で入れた分）' : 'シフトの予定') + (last && !names.includes(last) ? `　ラスト：${last}` : ''))]
+          : h('div', { class: 'muted2 pad' }, 'まだ入っていません（予定の画面か、閉店のときに入れます）'));
   }
 
   // ===== 精算済みの組 =====
@@ -268,6 +288,7 @@ export function renderToday(root, app) {
     const sum = daySummary(st.visits.filter(v => v.status !== ST_DEL), S());
     paintTop(sum);
     paintBreakdown(sum);
+    paintStaff();
     paintDone();
     paintRegister();
     paintClose(sum);
@@ -283,12 +304,17 @@ export function renderToday(root, app) {
   }
 
   const TABLES = ['visits', 'cashMoves', 'closings', 'days', 'staff'];
-  const offChange = app.sync.onChange(t => { if (TABLES.includes(t)) load(); });
+  const offChange = app.sync.onChange(t => {
+    if (TABLES.includes(t)) load();
+    if (['visits', 'closings', 'events'].includes(t)) cd.schedule(); // 売上・閉店・予定が変わったら、カウンターも読み直す
+  });
   const timer = setInterval(() => { if (!document.activeElement?.matches('input')) load(); }, 30e3);
+  const cdTimer = setInterval(() => cd.refresh(day().slice(0, 7)), 120e3);
+  cd.refresh();
   load();
   Promise.all([
     app.sync.pull('visits', day(), day()), app.sync.pull('cashMoves', from(), day()),
     app.sync.pull('closings', from(), day()), app.sync.pull('days', day(), day())
   ]).catch(() => {});
-  return () => { offChange(); clearInterval(timer); };
+  return () => { offChange(); clearInterval(timer); clearInterval(cdTimer); cd.destroy(); };
 }

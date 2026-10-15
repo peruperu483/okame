@@ -79,17 +79,17 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
   assert.equal(names.filter(n => n === '11月').length, 1);
   assert.ok(env.ss.getSheetByName('月のひな形').hidden);
   const sh = env.ss.getSheetByName('11月');
-  const grid = () => sh.getRange(1, 1, 33, 18).getValues();
+  const grid = () => sh.getRange(1, 1, 33, 20).getValues();
   let g = grid();
   assert.equal(g[0][0], '11月');
   assert.deepEqual(g[1].slice(0, 2), [1, '日']); // 11/1（日曜）：記録はないが、運用開始日以降の今日までの行は0円で出る
-  assert.equal(g[1][15], 220000); // 固定費は月の1日の行
+  assert.equal(g[1][16], 220000); // 固定費は月の1日の行
   const d2 = g[2];
   assert.deepEqual(d2.slice(0, 7), [2, '月', '岡本', '加奈', '', '', '日本酒の会']); // シフトは岡本が先
-  assert.deepEqual(d2.slice(7, 15), [10000, 8000, 7000, 40000, 0, 5000, 700, 2000]); // 加奈・スタッフ・現金・団体・ポイント・食品・その他・キャッシュレス
+  assert.deepEqual(d2.slice(8, 16), [10000, 8000, 7000, 40000, 0, 5000, 700, 2000]); // 加奈・スタッフ・現金・団体・ポイント・食品・その他・キャッシュレス
   assert.equal(g[4][2], '店休日');
-  assert.deepEqual(g[5].slice(2, 15), ['', '', '', '', '', 0, 0, 0, 0, 0, 0, 0, 0].slice(0, 13)); // 5日：今日（営業日）までは0円
-  assert.deepEqual(g[6].slice(2, 15), new Array(13).fill('')); // 6日：先の日は日付と曜日だけ
+  assert.deepEqual(g[5].slice(2, 16), ['', '', '', '', '', '', 0, 0, 0, 0, 0, 0, 0, 0]); // 見込みの列は空 // 5日：今日（営業日）までは0円
+  assert.deepEqual(g[6].slice(2, 16), new Array(14).fill('')); // 6日：先の日は日付と曜日だけ
 
   // もう1日閉店 → 同じタブの中身が書き換わる（タブは増えない・作り直さない）
   env.setNow('2026-11-06T22:00:00+09:00');
@@ -101,9 +101,9 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
   assert.equal(env.sheets.filter(s => s.name === '11月').length, 1);
   assert.equal(env.ss.getSheetByName('11月'), same);
   g = grid();
-  assert.equal(g[5][9], 6000);
-  assert.equal(g[2][9], 7000);
-  assert.equal(g[32][7], '=SUM(H2:H32)'); // 合計の式は残る
+  assert.equal(g[5][10], 6000);
+  assert.equal(g[2][10], 7000);
+  assert.equal(g[32][8], '=SUM(I2:I32)'); // 合計の式は残る
 
   // 月のタブの並び：9月・10月の取り込みがなくても、突き合わせより前に11月が来る
   env.gas.buildReconcileSheet_();
@@ -116,7 +116,7 @@ test('11月以降の月のタブ：閉店のたびに、その月のタブだけ
   assert.ok(!env.sheets.some(s => s.name === '10月'));
   // 閉店でない送信（来客だけ）では作り直さない：先に来客だけ送ってもエラーにならず、タブはそのまま
   sync([['visits', 'v9', { bizDate: '2026-11-06', no: 1, people: 1, kind: '単品', status: '退店', total: 500, cash: 500 }]]);
-  assert.equal(grid()[6][9], 0); // 500円は、次の閉店まで反映されない
+  assert.equal(grid()[6][10], 0); // 500円は、次の閉店まで反映されない
 });
 
 test('11月以降の月のタブ：作り直しに失敗しても、閉店の記録は届く', () => {
@@ -137,6 +137,6 @@ test('月のタブを作り直す（メニュー）：運用開始日の前は�
   assert.deepEqual(labels, ['11月', '12月']);
   labels.forEach((_, i) => env.gas.rebuildAppMonthTab_(['2026-11', '2026-12'][i]));
   assert.deepEqual(env.sheets.map(s => s.name).filter(n => /^1[12]月$/.test(n)), ['11月', '12月']);
-  assert.equal(env.ss.getSheetByName('11月').getRange(11, 10).getValues()[0][0], 6000); // 11/10は11行目
+  assert.equal(env.ss.getSheetByName('11月').getRange(11, 11).getValues()[0][0], 6000); // 11/10は11行目
   assert.equal(env.gas.monthTabLabel_('2027-01'), '2027年1月');
 });

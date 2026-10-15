@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.5.0';
+var APP_VERSION = '0.6.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -161,7 +161,7 @@ var SETTING_LABELS = {
   bizDayCutoffHour: '営業日の切り替え時刻（この時より前は前日の営業日）',
   openTime: '開店時刻',
   closeTime: '閉店時刻',
-  goLiveDate: '運用開始日（これより前の記録は試運転）',
+  goLiveDate: '運用開始日＝完全移行の日（これより前のアプリの記録は試運転。月の数字は管理シートを使う）',
   pointCountsAsSales: 'ポイントを売上に含める',
   defaultWage: '時給の初期値（円）',
   cancelReasons: '店内に戻す理由',
@@ -189,6 +189,7 @@ function onOpen() {
     .addSeparator()
     .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
+    .addItem('突き合わせを作り直す', 'buildReconcile')
     .addSeparator()
     .addItem('テストの行を消す', 'deleteTestRows')
     .addItem('共有トークンを作り直す', 'rotateTokenWithConfirm')
@@ -655,11 +656,13 @@ var LEGACY_COLS = {
   'ガス電気カラオケ': 'fixed:ガス・カラオケ・Wi-Fi・電話', 'ガス・カラオケ・Wi-Fi・電話': 'fixed:ガス・カラオケ・Wi-Fi・電話',
   '保険': 'fixed:保険'
 };
+// 塗りなし・1行おきの色（これ以外の塗り、たとえば黄色は、月のタブにそのまま写す）
+var LEGACY_PLAIN_BG = ['#ffffff', '#f6f8f9', '#f9f9f9', '#f3f3f3', '#efefef'];
 var LEGACY_DAILY_COLS = ['日付', '曜日', 'シフト', '店休日', 'イベント', '人件費（加奈）', '人件費（その他）', '現金売上', '団体売上',
   'キャッシュレス売上', 'ポイント売上', '飲食物（食品支出）', 'その他支出', '家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険', '取り込んだ日時'];
 
 /** 1つの月のタブ（2次元の値）を読む。today より先の日付は読まない */
-function parseLegacyTab_(values, month, today) {
+function parseLegacyTab_(values, month, today, backgrounds) {
   var norm = function (h) { return String(h == null ? '' : h).replace(/[\s　]/g, ''); };
   var header = values[0].map(norm);
   var col = {}, unknown = [];
@@ -684,11 +687,16 @@ function parseLegacyTab_(values, month, today) {
     var shift = [];
     for (var c = 2; c < eventCol; c++) { var nm = String(values[r][c] || '').trim(); if (nm) shift.push(nm); }
     var closed = shift.indexOf('店休日') >= 0;
+    var shiftCells = [];
+    for (var k = 2; k < 6; k++) shiftCells.push(k < eventCol ? String(values[r][k] || '').trim() : '');
+    var bgRow = backgrounds && backgrounds[r] ? backgrounds[r] : [];
+    var mark = function (c) { var b = String(bgRow[c] || '').toLowerCase(); return !b || LEGACY_PLAIN_BG.indexOf(b) >= 0 ? '' : b; };
+    var bg = { shift: [mark(2), mark(3), mark(4), mark(5)], event: mark(eventCol) };
     var fixed = {};
     Object.keys(col).forEach(function (k) { if (k.indexOf('fixed:') === 0) fixed[k.slice(6)] = (fixed[k.slice(6)] || 0) + n(values[r][col[k]]); });
     var get = function (k) { return col[k] != null ? n(values[r][col[k]]) : 0; };
     days.push({
-      date: date, dow: String(values[r][1] || ''), shift: shift.filter(function (x) { return x !== '店休日'; }), closed: closed,
+      date: date, dow: String(values[r][1] || ''), shift: shift.filter(function (x) { return x !== '店休日'; }), closed: closed, shiftCells: shiftCells, bg: bg,
       event: col.event != null ? String(values[r][col.event] || '').trim() : '',
       laborKana: get('laborKana'), laborOther: get('laborOther'), cash: get('cash'), group: get('group'),
       cashless: get('cashless'), point: get('point'), food: get('food'), other: get('other'), fixed: fixed
@@ -734,11 +742,16 @@ function importLegacy_(source, today) {
   monthly.setFrozenRows(1);
   monthly.setFrozenColumns(1);
 
+  var parsedByTab = {};
   Object.keys(LEGACY_TABS).forEach(function (tab) {
     var month = LEGACY_TABS[tab];
     var sh = source.getSheetByName(tab);
     if (!sh) { result.push({ tab: tab, month: month, error: 'タブ「' + tab + '」が見つかりません' }); return; }
-    var parsed = parseLegacyTab_(sh.getDataRange().getValues(), month, today);
+    var range = sh.getDataRange();
+    var bgs = null;
+    try { bgs = range.getBackgrounds(); } catch (e) { /* 塗りが読めなくても、数字は取り込む */ }
+    var parsed = parseLegacyTab_(range.getValues(), month, today, bgs);
+    parsedByTab[tab] = parsed;
     // 過去の日別：この月の行を消して、書き直す
     var last = daily.getLastRow();
     if (last > 1) {
@@ -767,6 +780,18 @@ function importLegacy_(source, today) {
   });
   protect_(daily);
   protect_(monthly);
+  // 月ごとのタブ（管理シートの9月と同じ形）と、突き合わせ
+  var tpl = prepareMonthTemplate_(ss, source.getSheetByName('9月'));
+  Object.keys(LEGACY_TABS).forEach(function (tab) {
+    if (!parsedByTab[tab]) return;
+    writeMonthTab_(ss, tpl, tab, LEGACY_TABS[tab], parsedByTab[tab].days);
+  });
+  arrangeTabs_(ss, Object.keys(LEGACY_TABS));
+  var recon = buildReconcileSheet_();
+  arrangeTabs_(ss, Object.keys(LEGACY_TABS).concat([RECON_SHEET]));
+  hide_(daily); // 普段は見えなくする（アプリの分析が読む。確認したいときは、タブの一覧から表示できる）
+  hide_(monthly);
+  result.forEach(function (x) { x.tabs = tpl.how; x.recon = recon; });
   return result;
 }
 
@@ -789,6 +814,306 @@ function writeLegacyColumn_(sh, month, totals) {
   rng.setValues(col);
 }
 
+// ===== 月ごとのタブ（9月・10月）：管理シートの9月のタブと同じ形・同じ見た目 =====
+// 「管理シートから取り込む」のたびに作り直す（何度やっても二重にならない）。
+// 見た目は、管理シートの9月のタブをそのままコピーして使う（チップ・色・幅が元と同じになる）。
+// コピーできなかったときは、同じ色・同じ並びで自前で作る（チップは色付きの塗りで代わりにする）。
+var MONTH_TPL_SHEET = '月のひな形';
+var MONTH_HEADERS = ['', '列 1', '列 2', '列 3', '列 4', '列 5', '団体及びイベント', '加奈', 'スタッフ', '現金\n売上', '団体\n売上', 'ポイント\n売上',
+  '食品\n支出', 'その他\n支出', 'キャッシュ\nレス\n売上', '家賃\n電気', 'ガス・カラオケ\nWi-Fi・電話', '保険'];
+var MONTH_WIDTHS = [60, 59, 100, 100, 100, 100, 212, 70, 92, 70, 70, 70, 71, 66, 66, 80, 110, 66];
+var MONTH_ROWS = 31; // 日の行（2〜32行目）。33行目が合計
+var YEN_FORMAT = '[$¥-411]#,##0';
+var DOW_JP = ['日', '月', '火', '水', '木', '金', '土'];
+var GREEN = '#356854';
+// チップの代わりの色（自前で作るときだけ）。管理シートのチップの色に近い色
+var CHIP_COLORS = { '岡本': '#a9c0d6', '加奈': '#cfe0f0', '店休日': '#efe9dc', '優輝': '#d7dcf5', 'ひな': '#e6dcf0', 'みか': '#f0dce6', 'あいか': '#dcf0e6',
+  '日': '#d6e9fb', '月': '#d3efe3', '火': '#d8eed0', '水': '#d3e5f5', '木': '#e0daf3', '金': '#cfe9d6', '土': '#e4eccf' };
+
+function dowOf_(date) { var p = date.split('-').map(Number); return DOW_JP[new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()]; }
+function daysInMonth_(month) { var p = month.split('-').map(Number); return new Date(Date.UTC(p[0], p[1], 0)).getUTCDate(); }
+function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+
+/** 見本（管理シートの9月）をコピーして、月のタブの「ひな形」を作る。コピーできなければ自前で作る */
+function prepareMonthTemplate_(ss, srcSheet) {
+  var old = ss.getSheetByName(MONTH_TPL_SHEET);
+  if (old) ss.deleteSheet(old);
+  var tpl = null, how = 'plain';
+  if (srcSheet && typeof srcSheet.copyTo === 'function') {
+    try {
+      tpl = srcSheet.copyTo(ss);
+      tpl.setName(MONTH_TPL_SHEET);
+      adjustCopiedTemplate_(tpl);
+      how = 'copy';
+    } catch (e) {
+      console.error('見本のコピーに失敗：' + e.message);
+      var broken = ss.getSheetByName(MONTH_TPL_SHEET) || tpl;
+      if (broken) { try { ss.deleteSheet(broken); } catch (e2) { /* 消せなくても先へ */ } }
+      tpl = null;
+    }
+  }
+  if (!tpl) tpl = buildPlainTemplate_(ss);
+  protect_(tpl);
+  hide_(tpl);
+  return { sheet: tpl, how: how };
+}
+
+/** コピーした見本を、新しい形（日の中身を空に・固定費3列・保険の列・メモ欄なし）にそろえる */
+function adjustCopiedTemplate_(sh) {
+  sh.getRange(2, 1, MONTH_ROWS, 18).clearContent();
+  sh.getRange(2, 1, MONTH_ROWS, 18).setBackground(null); // 元の黄色や灰色の塗りは、取り込むときに必要な所だけ付け直す
+  var rest = sh.getMaxRows() - (MONTH_ROWS + 2);
+  if (rest > 0) sh.getRange(MONTH_ROWS + 3, 1, rest, sh.getMaxColumns()).clear(); // 売上目標などのメモ欄は持ち込まない
+  sh.getRange(1, 17, MONTH_ROWS + 2, 1).copyTo(sh.getRange(1, 18, MONTH_ROWS + 2, 1)); // 保険の列は、ガスの列と同じ書式で足す
+  sh.getRange(1, 1, 1, 18).setValues([MONTH_HEADERS]).setWrap(true).setFontSize(10).setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sh.setRowHeight(1, 48);
+  MONTH_WIDTHS.forEach(function (w, i) { if (i >= 14) sh.setColumnWidth(i + 1, w); });
+  var bands = sh.getBandings();
+  if (bands.length) bands[0].setRange(sh.getRange(1, 1, MONTH_ROWS + 2, 18));
+  else styleBanding_(sh.getRange(1, 1, MONTH_ROWS + 2, 18));
+}
+
+function styleBanding_(range) {
+  var b = range.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
+  b.setHeaderRowColor(GREEN).setFirstRowColor('#ffffff').setSecondRowColor('#f6f8f9');
+}
+
+/** 自前のひな形：緑の見出し・1行おきの色・¥表示・合計の行（元のシートと同じ並び） */
+function buildPlainTemplate_(ss) {
+  var sh = ss.insertSheet(MONTH_TPL_SHEET);
+  sh.getRange(1, 1, 1, 18).setValues([MONTH_HEADERS]).setBackground(GREEN).setFontColor('#ffffff').setFontWeight('bold')
+    .setWrap(true).setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sh.setRowHeight(1, 48);
+  MONTH_WIDTHS.forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  sh.getRange(2, 8, MONTH_ROWS + 1, 11).setNumberFormat(YEN_FORMAT);
+  sh.getRange(2, 1, MONTH_ROWS, 1).setNumberFormat('0');
+  sh.getRange(2, 1, MONTH_ROWS, 2).setHorizontalAlignment('center');
+  sh.getRange(1, 1, MONTH_ROWS + 2, 18).setBorder(true, true, true, true, true, true, '#dddddd', SpreadsheetApp.BorderStyle.SOLID);
+  styleBanding_(sh.getRange(1, 1, MONTH_ROWS + 2, 18));
+  sh.getRange(MONTH_ROWS + 2, 1).setValue('合計').setFontWeight('bold');
+  var cols = 'HIJKLMNOPQR'.split('');
+  sh.getRange(MONTH_ROWS + 2, 8, 1, 11).setFormulas([cols.map(function (c) { return '=SUM(' + c + '2:' + c + (MONTH_ROWS + 1) + ')'; })]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  sh.setFrozenColumns(2);
+  return sh;
+}
+
+/** タブを隠す（隠せなくても先へ進む） */
+function hide_(sh) { try { sh.hideSheet(); } catch (e) { console.error("タブを隠せませんでした：" + e.message); } }
+
+function blankRow_() { var r = []; for (var i = 0; i < 18; i++) r.push(''); return r; }
+
+/** 1か月分のタブを作る（あれば作り直す）。days は parseLegacyTab_ の結果。today までの日だけ中身が入る */
+function writeMonthTab_(ss, tpl, label, month, days) {
+  var old = ss.getSheetByName(label);
+  if (old) ss.deleteSheet(old);
+  var sh = tpl.sheet.copyTo(ss);
+  sh.setName(label);
+  try { sh.showSheet(); } catch (e) { /* もとから見えている */ }
+  var byDate = {};
+  days.forEach(function (d) { byDate[d.date] = d; });
+  var n = daysInMonth_(month);
+  var values = [], marks = [];
+  for (var i = 0; i < MONTH_ROWS; i++) {
+    var row = blankRow_();
+    if (i >= n) { values.push(row); continue; }
+    var date = month + '-' + pad2_(i + 1), d = byDate[date];
+    row[0] = i + 1; row[1] = dowOf_(date);
+    if (d) {
+      var sc = d.shiftCells || [];
+      row[2] = sc[0] || ''; row[3] = sc[1] || ''; row[4] = sc[2] || ''; row[5] = sc[3] || '';
+      row[6] = d.event; row[7] = d.laborKana; row[8] = d.laborOther; row[9] = d.cash; row[10] = d.group; row[11] = d.point;
+      row[12] = d.food; row[13] = d.other; row[14] = d.cashless;
+      row[15] = d.fixed['家賃電気'] || 0; row[16] = d.fixed['ガス・カラオケ・Wi-Fi・電話'] || 0; row[17] = d.fixed['保険'] || 0;
+      var bg = d.bg || {};
+      (bg.shift || []).forEach(function (c, k) { if (c) marks.push([i + 2, 3 + k, c]); });
+      if (bg.event) marks.push([i + 2, 7, bg.event]);
+    }
+    values.push(row);
+  }
+  sh.getRange(1, 1).setValue(label);
+  sh.getRange(2, 1, MONTH_ROWS, 18).setValues(values);
+  marks.forEach(function (m) { sh.getRange(m[0], m[1]).setBackground(m[2]); });
+  if (tpl.how === 'plain') { // チップの代わりに、曜日とシフトの名前へ色を付ける
+    for (var r = 0; r < MONTH_ROWS; r++) {
+      for (var c = 1; c <= 5; c++) {
+        var v = values[r][c];
+        var marked = marks.some(function (m) { return m[0] === r + 2 && m[1] === c + 1; });
+        if (v && CHIP_COLORS[v] && !marked) sh.getRange(r + 2, c + 1).setBackground(CHIP_COLORS[v]);
+      }
+    }
+  }
+  protect_(sh);
+  return sh;
+}
+
+/** タブを、先頭から指定の順に並べる */
+function arrangeTabs_(ss, names) {
+  if (typeof ss.setActiveSheet !== 'function' || typeof ss.moveActiveSheet !== 'function') return;
+  names.forEach(function (name, i) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return;
+    ss.setActiveSheet(sh);
+    ss.moveActiveSheet(i + 1);
+  });
+}
+
+// ===== 突き合わせ：試運転の日ごとに、アプリの記録と管理シートの数字を並べる =====
+var RECON_SHEET = '突き合わせ';
+var RECON_ITEMS = [['現金売上', 'cash'], ['キャッシュレス', 'cashless'], ['ポイント', 'point'], ['団体（イベント）売上', 'group'],
+  ['人件費', 'labor'], ['仕入れ（食品）', 'food'], ['仕入れ（その他）', 'other']];
+
+/** 「過去の日別」の行を読む（管理シート側の数字） */
+function readLegacyRows_() {
+  var sh = SpreadsheetApp.getActive().getSheetByName(LEGACY_DAILY_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var head = vals[0].map(String);
+  var at = function (name) { return head.indexOf(name); };
+  var n = function (r, name) { var i = at(name); return i < 0 ? 0 : Number(r[i]) || 0; };
+  var text = function (r, name) { var i = at(name); return i < 0 || r[i] == null ? '' : String(r[i]).trim(); };
+  return vals.slice(1).map(function (r) {
+    var d = r[0] instanceof Date ? Utilities.formatDate(r[0], TZ, 'yyyy-MM-dd') : String(r[0]).slice(0, 10);
+    var shift = text(r, 'シフト');
+    return {
+      date: d, closed: text(r, '店休日') !== '', shift: shift ? shift.split('、') : [], event: text(r, 'イベント'),
+      laborKana: n(r, '人件費（加奈）'), laborOther: n(r, '人件費（その他）'), cash: n(r, '現金売上'), group: n(r, '団体売上'),
+      cashless: n(r, 'キャッシュレス売上'), point: n(r, 'ポイント売上'), food: n(r, '飲食物（食品支出）'), other: n(r, 'その他支出'),
+      fixed: { '家賃電気': n(r, '家賃電気'), 'ガス・カラオケ・Wi-Fi・電話': n(r, 'ガス・カラオケ・Wi-Fi・電話'), '保険': n(r, '保険') }
+    };
+  }).filter(function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d.date); });
+}
+
+/** 試運転の日ごとの、アプリ側の数字（運用開始日より前、または試運転の印のある記録） */
+function appTrialFigures_(settings) {
+  var goLive = String(settings.goLiveDate || '');
+  var n = function (v) { return Number(v) || 0; };
+  var out = {};
+  var at = function (d) { return out[d] = out[d] || { cash: 0, cashless: 0, point: 0, group: 0, labor: 0, food: 0, other: 0 }; };
+  var trial = function (row, d) { return row.trial === true || (goLive && String(d) < goLive); };
+  readTable_(TABLES.visits).rows.forEach(function (v) {
+    if (v.status !== '退店' || !v.bizDate || !trial(v, v.bizDate)) return;
+    var f = at(v.bizDate);
+    if (v.kind === 'イベント') f.group += n(v.total);
+    else { f.cash += n(v.cash); f.cashless += n(v.cashless); f.point += n(v.point); }
+  });
+  readTable_(TABLES.closings).rows.forEach(function (c) { if (c.bizDate && trial(c, c.bizDate)) at(c.bizDate); });
+  readTable_(TABLES.purchases).rows.forEach(function (p) {
+    if (p.status === '削除' || !p.date || !trial(p, p.date)) return;
+    at(p.date)[p.category === '飲食物' ? 'food' : 'other'] += n(p.amount);
+  });
+  readTable_(TABLES.attendance).rows.forEach(function (a) {
+    if (a.status === '削除' || !a.bizDate || !trial(a, a.bizDate)) return;
+    at(a.bizDate).labor += n(a.cost);
+  });
+  return out;
+}
+
+/** 「突き合わせ」タブを作り直す。ずれのある日が赤く見える */
+function buildReconcileSheet_() {
+  var settings = getSettings_();
+  var ss = SpreadsheetApp.getActive();
+  var app = appTrialFigures_(settings);
+  var legacy = {};
+  readLegacyRows_().forEach(function (d) {
+    legacy[d.date] = { cash: d.cash, cashless: d.cashless, point: d.point, group: d.group, labor: d.laborKana + d.laborOther, food: d.food, other: d.other };
+  });
+  var dates = Object.keys(app).sort();
+  var head = ['日付', '曜日', '結果', 'ずれの合計（円）'];
+  RECON_ITEMS.forEach(function (it) { head.push(it[0] + '\nアプリ', it[0] + '\n管理シート', it[0] + '\n差'); });
+  var rows = [], statuses = [], diffCells = [];
+  var tot = RECON_ITEMS.map(function () { return [0, 0, 0]; });
+  var gap = 0, compared = 0;
+  dates.forEach(function (date, r) {
+    var a = app[date], l = legacy[date];
+    var row = [date, dowOf_(date), '', 0];
+    var sumAbs = 0;
+    RECON_ITEMS.forEach(function (it, k) {
+      var x = a[it[1]];
+      if (l) {
+        var y = l[it[1]], diff = x - y;
+        row.push(x, y, diff);
+        sumAbs += Math.abs(diff);
+        tot[k][0] += x; tot[k][1] += y; tot[k][2] += diff;
+        if (diff !== 0) diffCells.push([r + 3, 5 + k * 3 + 2]);
+      } else row.push(x, '', '');
+    });
+    if (l) { compared += 1; if (sumAbs) gap += 1; }
+    row[2] = !l ? '管理シートに行なし' : sumAbs ? 'ずれあり' : '一致';
+    row[3] = l ? sumAbs : '';
+    statuses.push(row[2]);
+    rows.push(row);
+  });
+  var old = ss.getSheetByName(RECON_SHEET);
+  if (old) ss.deleteSheet(old);
+  var sh = ss.insertSheet(RECON_SHEET);
+  var width = head.length;
+  var stamp = nowIso_().slice(0, 16).replace('T', ' ');
+  var title = dates.length
+    ? 'ずれのある日：' + gap + '日 ／ 比べた日：' + compared + '日（試運転の記録がある日：' + dates.length + '日）　作成：' + stamp
+    : '試運転の記録がまだありません（運用開始日より前のアプリの記録が、ここに並びます）　作成：' + stamp;
+  sh.getRange(1, 1).setValue(title).setFontWeight('bold');
+  sh.getRange(2, 1, 1, width).setValues([head]).setBackground(GREEN).setFontColor('#ffffff').setFontWeight('bold')
+    .setWrap(true).setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sh.setRowHeight(2, 48);
+  if (rows.length) {
+    var fmt = head.map(function (h, j) { return j < 3 ? '@' : '#,##0;[Red]-#,##0'; });
+    var body = sh.getRange(3, 1, rows.length, width);
+    body.setNumberFormats(rows.map(function () { return fmt; }));
+    body.setValues(rows);
+    var total = ['合計', '', '', ''];
+    tot.forEach(function (t) { total.push(t[0], t[1], t[2]); });
+    var tr = sh.getRange(3 + rows.length, 1, 1, width);
+    tr.setNumberFormats([fmt]);
+    tr.setValues([total]);
+    tr.setFontWeight('bold');
+    statuses.forEach(function (s, r) {
+      sh.getRange(r + 3, 3).setBackground(s === '一致' ? '#d9ead3' : s === 'ずれあり' ? '#f4c7c3' : '#eeeeee');
+    });
+    diffCells.forEach(function (p) { sh.getRange(p[0], p[1]).setBackground('#f4c7c3'); });
+  }
+  sh.setColumnWidth(1, 100); sh.setColumnWidth(2, 50); sh.setColumnWidth(3, 130); sh.setColumnWidth(4, 100);
+  for (var c = 5; c <= width; c++) sh.setColumnWidth(c, 92);
+  sh.setFrozenRows(2);
+  sh.setFrozenColumns(2);
+  protect_(sh);
+  return { dates: dates.length, compared: compared, gap: gap };
+}
+
+/** スプシのメニュー */
+function buildReconcile() {
+  var r = buildReconcileSheet_();
+  notify_('「' + RECON_SHEET + '」を作り直しました（試運転の記録がある日：' + r.dates + '日、ずれのある日：' + r.gap + '日）。');
+}
+
+/** 運用開始日が月の途中のとき、その月の運用開始日より前の分を、管理シートの数字で足す */
+function mergeLegacyDays_(s, rows, settings) {
+  var pointCounts = settings.pointCountsAsSales !== false;
+  var fixed = {}, kana = 0;
+  rows.forEach(function (d) {
+    var sales = d.cash + d.group + d.cashless + (pointCounts ? d.point : 0);
+    var open = !d.closed && d.shift.length > 0;
+    s.sales += sales; s.cash += d.cash; s.cashless += d.cashless; s.point += d.point; s.event += d.group;
+    if (d.event) s.eventGroups += 1;
+    if (open) { s.openDays += 1; if (sales === 0) s.zeroDays.push(d.date); }
+    if (d.closed) s.closedDays += 1;
+    s.purchases['飲食物'] += d.food; s.purchases['その他'] += d.other; s.purchaseTotal += d.food + d.other;
+    Object.keys(d.fixed).forEach(function (k) { fixed[k] = (fixed[k] || 0) + d.fixed[k]; });
+    kana += d.laborKana; s.laborOthers.cost += d.laborOther; s.laborTotal += d.laborKana + d.laborOther;
+  });
+  Object.keys(fixed).forEach(function (k) { // 管理シートに固定費があれば、アプリの同じ項目の代わりにそちらを使う（二重に数えない）
+    if (!fixed[k]) return;
+    s.fixedTotal += fixed[k] - (s.fixed[k] || 0);
+    s.fixed[k] = fixed[k];
+  });
+  if (kana) {
+    var r = s.laborFixed.filter(function (x) { return x.name === '加奈'; })[0];
+    if (r) r.cost += kana; else s.laborFixed.push({ name: '加奈', days: 0, hours: 0, transport: 0, cost: kana });
+  }
+  s.zeroDays.sort();
+  return s;
+}
+
 /** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
 function importLegacy() {
   var ui = SpreadsheetApp.getUi();
@@ -808,7 +1133,8 @@ function importLegacy() {
   ui.alert('取り込みました（' + today + ' まで）\n\n' + res.map(function (x) {
     if (x.error) return x.tab + '：' + x.error;
     return x.tab + '：' + x.days + '日分（' + x.until + '）・売上 ' + Number(x.sales).toLocaleString() + '円' + (x.unknown.length ? '\n　読めなかった列：' + x.unknown.join('、') : '');
-  }).join('\n') + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
+  }).join('\n') + '\n\n月のタブ（9月・10月）を' + (res[0] && res[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。'
+    + (res[0] && res[0].recon ? '\n突き合わせ：試運転の記録がある日 ' + res[0].recon.dates + '日・ずれのある日 ' + res[0].recon.gap + '日' : '') + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
 }
 
 // ===== 月次 =====
@@ -830,6 +1156,7 @@ function monthlySummary_(month, settings) {
   }
   var n = function (v) { return Number(v) || 0; };
   var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
+  var splitMonth = !!goLive && goLive.slice(0, 7) === month && goLive.slice(8, 10) > '01'; // 運用開始日が月の途中
   var s = {
     month: month, legacy: false, sales: 0, guests: 0, groups: 0, cash: 0, cashless: 0, point: 0,
     nomi: 0, tanpin: 0, event: 0, eventGroups: 0, openDays: 0, closedDays: 0, zeroDays: [],
@@ -879,6 +1206,10 @@ function monthlySummary_(month, settings) {
     r.days += 1; r.hours += n(a.hours); r.transport += n(a.transport); r.cost += n(a.cost);
   });
   s.laborFixed = Object.keys(byStaff).map(function (k) { return byStaff[k]; });
+  if (splitMonth) {
+    var before = readLegacyRows_().filter(function (d) { return monthOf_(d.date) === month && d.date < goLive; });
+    if (before.length) { mergeLegacyDays_(s, before, settings); s.splitAt = goLive; }
+  }
   readTable_(TABLES.events).rows.forEach(function (e) {
     if (e.status !== '削除' && inMonth(e.date) && (settings.eventTypes || []).indexOf(e.type) >= 0) s.plannedEvents += 1;
   });

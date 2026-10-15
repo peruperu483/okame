@@ -64,7 +64,7 @@ function renderForm(root, app) {
       num('飲み放題の時間', () => draft.nomiMinutes, x => { draft.nomiMinutes = x; }, '分'),
       num('ラストオーダーの知らせ', () => draft.lastOrderMinutes, x => { draft.lastOrderMinutes = x; }, '分前', '飲み放題の残りがこの時間になったら、カードの色を変えます。'),
       num('営業日の切り替え', () => draft.bizDayCutoffHour, x => { draft.bizDayCutoffHour = x; }, '時', 'この時刻より前は、前日の営業日として数えます（例：12なら、深夜1時の会計は前日の営業）。'),
-      field('運用開始日', 'この日より前の営業日の記録は「試運転」として、集計から外します。',
+      field('運用開始日（完全移行の日）', 'この日より前の営業日の記録は「試運転」として、集計から外します。月の数字は、この日の前日までは管理シートの数字です。早めるときは、ここを変えます。',
         h('input', { class: 'input', type: 'date', value: draft.goLiveDate, oninput: e => { draft.goLiveDate = e.target.value; dirty(); } }))),
 
     card('延長', h('p', { class: 'help' }, '料金と時間が決まったら足してください。会計のときに選べるようになります。'),

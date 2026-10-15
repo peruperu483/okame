@@ -68,7 +68,7 @@ export function renderAna(root, app) {
           h('div', { class: 'small' }, `団体・イベント ${t.events}組` + (t.monthlyEvents ? `（目標 ${t.monthlyEvents}件）` : '') + (s.plannedEvents ? `・予定 ${s.plannedEvents}件` : ''))),
         h('div', { class: 'dcard' },
           h('div', { class: 'lab' }, '差し引き'),
-          h('div', { class: 'big30 num ' + (s.profit < 0 ? 'neg' : '') }, yen(s.profit)),
+          h('div', { class: 'big30 num ' + (s.profit < 0 ? 'neg' : '') }, s.profit == null ? 'GASを0.7.0に' : yen(s.profit)), // 古いGASのときは、貼り替えを促す
           h('div', { class: 'small muted2' }, `売上 ${yen(s.sales)} − 支出 ${yen(s.expenses)}`),
           h('div', { class: 'small muted2' }, '支出に店長報酬を含みます'))),
       h('div', { class: 'dash-two' },
@@ -84,7 +84,7 @@ export function renderAna(root, app) {
           row('人件費', yen(s.laborTotal), 'strong'),
           s.laborFixed.map(x => row(`　${x.name}` + (x.days ? `（${x.days}日・${fmtHours(x.hours)}${x.transport ? '・交通費' + yen(x.transport) : ''}）` : ''), yen(x.cost))),
           row('　人件費（その他）' + (s.laborOthers.names.length ? `（${s.laborOthers.names.join('・')}）` : ''), yen(s.laborOthers.cost)),
-          row('店長報酬', yen(s.mgrFee), 'strong'),
+          row('店長報酬', yen(s.mgrFee || 0), 'strong'),
           row('支出の合計', yen(s.expenses), 'strong')),
         h('section', { class: 'dcard' }, h('h2', {}, '率と日数'),
           row('人件費率', s.laborRate + '%'),

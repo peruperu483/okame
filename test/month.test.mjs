@@ -135,3 +135,52 @@ test('運用開始日が月の途中のとき、その月は「運用開始日�
   env.call('saveSettings', { mgrToken, settings: { goLiveDate: '2026-11-01' } });
   assert.equal(env.call('monthly', { mgrToken, month: '2026-10' }).summary.legacy, true);
 });
+
+test('取り込み直し：10月の続きが打たれても、何度実行しても金額は二重にならず、10月のタブと月次が上書きされる', () => {
+  const { env, source } = legacyEnv();
+  const mgrToken = env.login();
+  const daily = () => env.ss.getSheetByName('過去の日別').dump();
+  const octSales = () => env.call('monthly', { mgrToken, month: '2026-10' }).summary.sales;
+  // 10/14：1回目と2回目（同じ内容）
+  const r1 = plain(env.gas.reimportLegacy_(source(), '2026-10-14'));
+  const oct1 = r1.money.find(x => x.tab === '10月');
+  assert.equal(oct1.sales, 100000 + 5000 + 25000 + 25000); // 10/2 現金・キャッシュレス、10/10、10/14
+  assert.equal(octSales(), oct1.sales);
+  const rows1 = daily().length, events1 = env.ss.getSheetByName('予定').dump().length, days1 = env.ss.getSheetByName('営業日').dump().length;
+  const r2 = plain(env.gas.reimportLegacy_(source(), '2026-10-14'));
+  assert.equal(r2.money.find(x => x.tab === '10月').sales, oct1.sales);
+  assert.equal(octSales(), oct1.sales);
+  assert.equal(daily().length, rows1);
+  assert.equal(env.ss.getSheetByName('予定').dump().length, events1);
+  assert.equal(env.ss.getSheetByName('営業日').dump().length, days1);
+  // 管理シートに10月の続きが打たれた：10/14 を直し（25000 → 27000）、10/20 に売上とイベント
+  const src = source();
+  const oct = src.getSheetByName('10月');
+  oct.getRange(5, 10).setValue(27000);
+  oct.getRange(6, 10).setValue(18000);
+  oct.getRange(6, 7).setValue('歓送会');
+  env.setNow('2026-10-20T20:00:00+09:00');
+  const r3 = plain(env.gas.reimportLegacy_(src, '2026-10-20'));
+  const oct3 = r3.money.find(x => x.tab === '10月');
+  assert.equal(oct3.sales, oct1.sales + 2000 + 18000);
+  assert.equal(oct3.until, '2026-10-01〜2026-10-20');
+  assert.equal(octSales(), oct3.sales);
+  assert.equal(env.call('monthly', { mgrToken, month: '2026-09' }).summary.sales, r1.money.find(x => x.tab === '9月').sales); // 9月は変わらない
+  // 過去の日別：10月は5日分（1・2・10・14・20日）。同じ日は1行だけ
+  const octRows = daily().filter(r => String(r['日付']).startsWith('2026-10'));
+  assert.deepEqual(octRows.map(r => String(r['日付'])), ['2026-10-01', '2026-10-02', '2026-10-10', '2026-10-14', '2026-10-20']);
+  assert.equal(octRows.find(r => r['日付'] === '2026-10-14')['現金売上'], 27000);
+  // 10月のタブ：上書きされる（1つのまま）
+  assert.equal(env.sheets.filter(x => x.name === '10月').length, 1);
+  const tab = env.ss.getSheetByName('10月');
+  assert.equal(tab.getRange(15, 10).getValue(), 27000); // 14日の現金売上
+  assert.equal(tab.getRange(21, 10).getValue(), 18000); // 20日の現金売上
+  assert.equal(tab.getRange(21, 7).getValue(), '歓送会');
+  // 予定：10/20 のイベントが増える（二重にはならない）
+  assert.equal(env.ss.getSheetByName('予定').dump().filter(e => e['内容'] === '歓送会').length, 1);
+  // 表示：日数・件数・10月の売上の合計
+  const msg = env.gas.reimportMessage_(r3);
+  assert.match(msg, /■ 10月\n　金額：5日分（2026-10-01〜2026-10-20）・売上の合計 ¥175,000/);
+  assert.match(msg, /　予定：シフトのある日 \d+日（うち店休日 \d+日）・シフトの人数 のべ\d+人・イベント \d+件/);
+  assert.match(msg, /10月の売上の合計：¥175,000（2026-10-01〜2026-10-20）/);
+});

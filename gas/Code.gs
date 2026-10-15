@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.13.1';
+var APP_VERSION = '0.14.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -198,8 +198,7 @@ function onOpen() {
     .addItem('共有トークンを表示', 'showToken')
     .addItem('暗証番号を作り直す', 'resetPin')
     .addSeparator()
-    .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
-    .addItem('管理シートのシフトとイベントを予定に取り込む（9月・10月）', 'importLegacyPlans')
+    .addItem('管理シートから取り込み直す（9月・10月）', 'reimportLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
     .addItem('来月のタブを作る', 'createNextMonthTab')
     .addItem('月のタブを作り直す（11月以降）', 'buildAppMonthTabs')
@@ -1911,18 +1910,44 @@ function openLegacySource_(ui, title) {
   return source;
 }
 
-/** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
-function importLegacy() {
+/**
+ * 管理シート（9月・10月）を取り込み直す（ロックの中で呼ぶ）：金額（過去の日別・過去の月次・9月と10月のタブ）と、予定（シフト・イベント）をまとめて。
+ * どちらも、何度実行しても二重にならない（金額はその月をまるごと置き換え、予定はIDで上書き）。管理シートに10月の続きが打たれたら、これを実行する
+ */
+function reimportLegacy_(source, today) {
+  return { today: today, money: importLegacy_(source, today), plans: importLegacyPlans_(source) };
+}
+
+/** 取り込み直しの結果の表示 */
+function reimportMessage_(r) {
+  var yen = function (v) { return '¥' + String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
+  var plan = {};
+  r.plans.tabs.forEach(function (t) { plan[t.tab] = t; });
+  var lines = ['管理シートから取り込み直しました（金額は ' + r.today + ' まで。予定は月末まで）', ''];
+  r.money.forEach(function (x) {
+    if (x.error) { lines.push(x.tab + '：' + x.error); return; }
+    var p = plan[x.tab] || {};
+    lines.push('■ ' + x.tab);
+    lines.push('　金額：' + x.days + '日分（' + x.until + '）・売上の合計 ' + yen(x.sales));
+    lines.push('　予定：シフトのある日 ' + (p.days || 0) + '日（うち店休日 ' + (p.closedDays || 0) + '日）・シフトの人数 のべ' + (p.people || 0) + '人・イベント ' + (p.events || 0) + '件');
+    if (x.unknown.length) lines.push('　読めなかった列：' + x.unknown.join('、'));
+  });
+  var oct = r.money.filter(function (x) { return x.tab === '10月' && !x.error; })[0];
+  if (oct) lines.push('', '10月の売上の合計：' + yen(oct.sales) + '（' + oct.until + '）');
+  if (r.plans.removed) lines.push('', '管理シートから消えていたイベント：' + r.plans.removed + '件を削除にしました');
+  lines.push('', '月のタブ（9月・10月）を' + (r.money[0] && r.money[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。',
+    '何度実行しても二重にはなりません（金額はその月をまるごと置き換え、予定は同じ日・同じ名前に上書きします）。');
+  return lines.join('\n');
+}
+
+/** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月の金額と予定を取り込み直す */
+function reimportLegacy() {
   var ui = SpreadsheetApp.getUi();
-  var source = openLegacySource_(ui, '管理シートから取り込む');
+  var source = openLegacySource_(ui, '管理シートから取り込み直す');
   if (!source) return;
   var today = serverBizDate_(getSettings_());
-  var res = withLock_(function () { return importLegacy_(source, today); });
-  ui.alert('取り込みました（' + today + ' まで）\n\n' + res.map(function (x) {
-    if (x.error) return x.tab + '：' + x.error;
-    return x.tab + '：' + x.days + '日分（' + x.until + '）・売上 ' + Number(x.sales).toLocaleString() + '円' + (x.unknown.length ? '\n　読めなかった列：' + x.unknown.join('、') : '');
-  }).join('\n') + '\n\n月のタブ（9月・10月）を' + (res[0] && res[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。'
-    + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
+  var r = withLock_(function () { return reimportLegacy_(source, today); });
+  ui.alert(reimportMessage_(r));
 }
 
 // ===== 管理シート（9月・10月）のシフトとイベントを、アプリの予定に入れる =====
@@ -1989,19 +2014,6 @@ function importLegacyPlans_(source) {
   appendLog_({ type: '管理シートの予定を取り込む', table: 'days', targetId: months.join(','),
     after: { days: res.days, people: res.people, closedDays: res.closedDays, events: res.events, removed: res.removed }, by: '管理シートの取り込み' }, ctx);
   return res;
-}
-
-/** スプシのメニュー：管理シート（9月・10月）のシフトとイベントを、アプリの予定に入れる */
-function importLegacyPlans() {
-  var ui = SpreadsheetApp.getUi();
-  var source = openLegacySource_(ui, '管理シートのシフトとイベントを予定に取り込む');
-  if (!source) return;
-  var r = withLock_(function () { return importLegacyPlans_(source); });
-  ui.alert('アプリの予定に取り込みました（9月・10月。名前と予定だけ。金額は入れていません）\n\n' + r.tabs.map(function (t) {
-    return t.error ? t.tab + '：' + t.error
-      : t.tab + '：シフトのある日 ' + t.days + '日（うち店休日 ' + t.closedDays + '日）・シフトの人数 のべ' + t.people + '人・イベント ' + t.events + '件';
-  }).join('\n') + (r.removed ? '\n管理シートから消えていたイベント：' + r.removed + '件を削除にしました' : '')
-    + '\n\nもう一度実行しても二重にはなりません。');
 }
 
 // ===== 月次 =====

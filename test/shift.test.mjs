@@ -40,12 +40,12 @@ test('初期設定で自動の動き（トリガー）ができ、何度実行�
   assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit']);
 });
 
-test('来月のタブ：日付・曜日・シフトの予定・ラスト・店休日・予定のイベントの名前が入り、金額は空', () => {
+test('来月のタブ：日付・曜日・シフトの予定・店休日・予定のイベントの名前が入り、金額は空。ラストの列はない', () => {
   const env = boot();
   const mgrToken = env.login();
   const sync = (table, id, data) => env.call('sync', { mgrToken, ops: [{ opId: 'o-' + id, table, id, data }] });
   sync('staff', 's1', { name: '加奈', wage: 2000, active: true });
-  sync('days', '2026-11-03', { bizDate: '2026-11-03', shiftPlan: '加奈、岡本', lastPlan: '加奈' });
+  sync('days', '2026-11-03', { bizDate: '2026-11-03', shiftPlan: '加奈、岡本' });
   sync('days', '2026-11-04', { bizDate: '2026-11-04', closed: true });
   sync('events', 'e1', { date: '2026-11-03', type: '団体', title: '日本酒の会', status: '有効' });
   // 20日：来月（11月）のタブを作る
@@ -53,11 +53,11 @@ test('来月のタブ：日付・曜日・シフトの予定・ラスト・店�
   assert.equal(env.sheets.filter(s => s.name === '11月').length, 1);
   const g = grid(env, '11月');
   assert.deepEqual(g[0].slice(0, 2), ['11月', '列 1']);
-  assert.equal(g[0][19], 'ラスト');
+  assert.equal(g[0][19], ''); // ラストの列はない（右端は保険）
+  assert.equal(g[0][18], '保険');
   assert.equal(g[0][7], '見込み');
   assert.deepEqual(g[1].slice(0, 2), [1, '日']); // 11/1（日曜）
   assert.deepEqual(g[3].slice(0, 7), [3, '火', '岡本', '加奈', '', '', '日本酒の会']); // 店長が先
-  assert.equal(g[3][19], '加奈'); // ラスト
   assert.deepEqual(g[4].slice(0, 3), [4, '水', '店休日']);
   assert.equal(g[3][7], ''); // 金額の列は空
   assert.deepEqual(g[3].slice(7, 19), new Array(12).fill('')); // 見込み・金額の列
@@ -78,7 +78,7 @@ test('来月のタブ：運用開始日より前の月・管理シートの月�
   assert.equal(env2.gas.createNextMonthTab_(), null);
 });
 
-test('打てる範囲：シフト・団体及びイベント・ラストだけ保護を外し、金額と合計は保護のまま。プルダウンにスタッフの名前と店休日', () => {
+test('打てる範囲：シフト・団体及びイベント・見込みだけ保護を外し、金額と合計は保護のまま。プルダウンにスタッフの名前と店休日', () => {
   const env = boot();
   const mgrToken = env.login();
   env.call('sync', { mgrToken, ops: [{ opId: 's', table: 'staff', id: 's1', data: { name: '加奈', wage: 2000, active: true } },
@@ -87,35 +87,33 @@ test('打てる範囲：シフト・団体及びイベント・ラストだけ�
   const sh = env.ss.getSheetByName('11月');
   assert.ok(sh.protection);
   const un = sh.protection.getUnprotectedRanges().map(r => [r.r, r.c, r.nr, r.nc]);
-  assert.deepEqual(plain(un), [[2, 3, 31, 6], [2, 20, 31, 1]]); // C〜H（シフト・団体及びイベント・見込み）と T（ラスト）。2〜32行目
+  assert.deepEqual(plain(un), [[2, 3, 31, 6]]); // C〜H（シフト・団体及びイベント・見込み）。2〜32行目
   // 金額の列（H〜R）と合計の行は、打てる範囲に入っていない
   assert.ok(un.every(([r, c, nr, nc]) => !(c <= 9 && c + nc - 1 >= 9) && r + nr - 1 < 33)); // 加奈の列（I）などの金額と、合計の行は入らない
-  // プルダウン：列2・3・4は設定どおり、列5は店長とスタッフと店休日、ラストは店長とスタッフ（在籍していない人は出ない）
+  // プルダウン：列2・3・4は設定どおり、列5は店長とスタッフと店休日（在籍していない人は出ない）
   const list = k => plain(env.ss.getSheetByName('シフト表のひな形').validations.get(k).list);
   assert.deepEqual([list('2:3'), list('2:4'), list('2:5')], [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']]);
   assert.deepEqual(list('2:6'), ['岡本', '加奈', '店休日']);
-  assert.deepEqual(list('2:20'), ['岡本', '加奈']);
+  assert.equal(env.ss.getSheetByName('シフト表のひな形').validations.get('2:20'), undefined); // ラストのプルダウンはない
   assert.equal(env.ss.getSheetByName('シフト表のひな形').validations.get('2:3').dropdown, true);
   // 月のタブにも写っていて、条件つき書式の背景色は使わない
   assert.deepEqual(plain(sh.validations.get('2:3').list), ['店休日', '岡本', '加奈']);
   assert.equal(sh.condRules.length, 0);
 });
 
-test('スプシで打ったシフト・店休日・ラスト・イベントが、アプリの予定に入る', () => {
+test('スプシで打ったシフト・店休日・イベントが、アプリの予定に入る', () => {
   const env = boot();
   const mgrToken = env.login();
   env.gas.createNextMonthTab_();
   // 11/5：シフト（岡本・加奈）。C=岡本 D=加奈
   typeCells(env, '11月', 6, 3, [['岡本', '加奈', '', '']]);
-  // ラスト
-  typeCells(env, '11月', 6, 20, [['加奈']]);
   // 団体及びイベント
   typeCells(env, '11月', 6, 7, [['日本酒の会、貸切']]);
   // 11/6：店休日
   typeCells(env, '11月', 7, 3, [['店休日', '', '', '']]);
   const days = env.call('fetch', { table: 'days' }).rows;
   const d5 = days.find(r => r.bizDate === '2026-11-05'), d6 = days.find(r => r.bizDate === '2026-11-06');
-  assert.deepEqual([d5.shiftPlan, d5.lastPlan, d5.closed], ['岡本、加奈', '加奈', false]);
+  assert.deepEqual([d5.shiftPlan, d5.closed], ['岡本、加奈', false]);
   assert.deepEqual([d6.closed, d6.shiftPlan], [true, '']);
   assert.ok(d5.updatedAt); // アプリが新しい内容として取り込める
   const events = env.call('fetch', { table: 'events' }).rows.filter(e => e.date === '2026-11-05');
@@ -139,11 +137,11 @@ test('スプシで打ったシフト・店休日・ラスト・イベントが�
 test('スプシの編集：複数の行をまとめて貼っても、打っていない列は触らない。ほかのタブ・金額の列は無視', () => {
   const env = boot();
   env.gas.createNextMonthTab_();
-  env.call('sync', { mgrToken: env.login(), ops: [{ opId: 'p', table: 'days', id: '2026-11-02', data: { bizDate: '2026-11-02', shiftPlan: '加奈', lastPlan: '加奈' } }] });
+  env.call('sync', { mgrToken: env.login(), ops: [{ opId: 'p', table: 'days', id: '2026-11-02', data: { bizDate: '2026-11-02', shiftPlan: '加奈', openCash: 30000 } }] });
   typeCells(env, '11月', 3, 3, [['岡本', '', '', ''], ['岡本', '加奈', '', '']]); // 11/2と11/3のシフト
   const days = env.call('fetch', { table: 'days' }).rows;
   const d2 = days.find(r => r.bizDate === '2026-11-02');
-  assert.deepEqual([d2.shiftPlan, d2.lastPlan], ['岡本', '加奈']); // ラストは触らない
+  assert.deepEqual([d2.shiftPlan, d2.openCash], ['岡本', 30000]); // シフトのほかは触らない
   assert.equal(days.find(r => r.bizDate === '2026-11-03').shiftPlan, '岡本、加奈');
   // 金額の列・ほかのタブの編集は、アプリに何も入れない
   const before = env.call('fetch', { table: 'days' }).rows.length;
@@ -161,13 +159,13 @@ test('アプリの予定を直すと、月のタブにも出る（どちらか�
   const mgrToken = env.login();
   env.gas.createNextMonthTab_();
   const sync = (table, id, data) => env.call('sync', { mgrToken, ops: [{ opId: 'o-' + id + Math.random(), table, id, data }] });
-  // アプリで：シフト・ラスト・店休日・イベント
-  sync('days', '2026-11-10', { bizDate: '2026-11-10', shiftPlan: '岡本、加奈', lastPlan: '岡本' });
+  // アプリで：シフト・店休日・イベント
+  sync('days', '2026-11-10', { bizDate: '2026-11-10', shiftPlan: '岡本、加奈' });
   sync('days', '2026-11-11', { bizDate: '2026-11-11', closed: true });
   sync('events', 'e1', { date: '2026-11-12', type: '団体', title: '歓迎会', status: '有効' });
   let g = grid(env, '11月');
   assert.deepEqual(g[10].slice(2, 8), ['岡本', '加奈', '', '', '', '']);
-  assert.equal(g[10][19], '岡本');
+  assert.equal(g[10][19], ''); // ラストの列はない
   assert.equal(g[11][2], '店休日');
   assert.equal(g[12][6], '歓迎会');
   // 金額の列は、予定を直しても触らない
@@ -185,30 +183,29 @@ test('アプリの予定を直すと、月のタブにも出る（どちらか�
   assert.equal(grid(env, '11月')[13][2], '岡本');
 });
 
-test('シフトとラストは実績があれば実績。予定のイベントと実際のイベントの組は、名前を1つにまとめる', () => {
+test('シフトは実績があれば実績。予定のイベントと実際のイベントの組は、名前を1つにまとめる', () => {
   const env = boot('2026-11-05T22:00:00+09:00');
   const mgrToken = env.login();
   const sync = ops => env.call('sync', { mgrToken, ops: ops.map(([table, id, data]) => ({ opId: 'o-' + id, table, id, data })) });
   sync([
-    ['days', '2026-11-02', { bizDate: '2026-11-02', shiftPlan: '岡本、加奈', lastPlan: '加奈' }],
+    ['days', '2026-11-02', { bizDate: '2026-11-02', shiftPlan: '岡本、加奈' }],
     ['events', 'ev1', { date: '2026-11-02', type: '団体', title: 'ユーワード懇親会', status: '有効' }],
     ['events', 'ev2', { date: '2026-11-02', type: '貸切', title: '貸切', status: '有効' }]
   ]);
-  // 閉店：実績のシフトとラスト。予定のイベントの組（eventId）と、予定にない当日のイベントの組
+  // 閉店：実績のシフト。予定のイベントの組（eventId）と、予定にない当日のイベントの組
   sync([
     ['visits', 'v1', { bizDate: '2026-11-02', no: 1, people: 10, kind: 'イベント', name: '懇親会（実際）', eventId: 'ev1', status: '退店', total: 40000, cash: 40000 }],
     ['visits', 'v2', { bizDate: '2026-11-02', no: 2, people: 4, kind: 'イベント', name: '飛び込みの会', status: '退店', total: 10000, cash: 10000 }],
     ['visits', 'v3', { bizDate: '2026-11-02', no: 3, people: 2, kind: 'イベント', name: '貸切', status: '退店', total: 5000, cash: 5000 }], // 予定と同じ名前（eventIdなし）
-    ['days', '2026-11-02', { bizDate: '2026-11-02', shiftActual: '岡本、加奈、みか', lastActual: '岡本' }],
+    ['days', '2026-11-02', { bizDate: '2026-11-02', shiftActual: '岡本、加奈、みか' }],
     ['closings', '2026-11-02', { bizDate: '2026-11-02', countedCash: 1 }]
   ]);
   const g = grid(env, '11月');
   assert.deepEqual(g[2].slice(2, 6), ['岡本', '加奈', 'みか', '']); // 実績
-  assert.equal(g[2][19], '岡本'); // ラストの実績
   assert.equal(g[2][6], 'ユーワード懇親会、貸切、飛び込みの会'); // 予定の名前に1つにまとめる
   assert.equal(g[2][11], 55000); // 団体売上（金額は閉店で入る）
   // 実績がなければ予定
-  env.call('sync', { mgrToken, ops: [{ opId: 'x', table: 'days', id: '2026-11-03', data: { bizDate: '2026-11-03', shiftPlan: '加奈', lastPlan: '加奈' } }] });
+  env.call('sync', { mgrToken, ops: [{ opId: 'x', table: 'days', id: '2026-11-03', data: { bizDate: '2026-11-03', shiftPlan: '加奈' } }] });
   assert.deepEqual(grid(env, '11月')[3].slice(2, 6), ['加奈', '', '', '']);
 });
 

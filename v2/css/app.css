@@ -523,8 +523,6 @@ button { cursor: pointer; }
 @media (max-width: 700px) { .cd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .staff-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .staff-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 22px; background: var(--bg2); font-weight: 600; }
-.staff-chip.last { background: var(--accent); color: #fff; }
-.staff-chip small { font-size: 11px; font-weight: 400; opacity: .9; }
 .plan-goal { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: stretch; margin-bottom: 12px; }
 @media (max-width: 900px) { .plan-goal { grid-template-columns: minmax(0, 1fr); } }
 .goal-edit .inline-add { align-items: center; }

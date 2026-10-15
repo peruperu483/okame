@@ -1,6 +1,6 @@
 // 予定：月のカレンダーと一覧。イベント・団体の予定、店休日、希望休、シフト（予定）を入れる
 // - イベント・団体：表 events。今日の予定は店内の入店で選べる
-// - 店休日：表 days の closed。シフト（予定）とラスト（予定）も days
+// - 店休日：表 days の closed。シフト（予定）も days
 // - 希望休：表 requests
 import { h, put, toast, uuid, yen } from '../util.js';
 import { ST_DEL } from '../calc.js';
@@ -118,29 +118,20 @@ export function renderPlan(root, app) {
       editable ? h('button', { class: 'btn btn-xs', onclick: () => editItem(e) }, '直す') : null);
   }
 
-  // シフト（予定）とラスト（予定）。閉店のときに、実績として直せる
+  // シフト（予定）。閉店のときに、実績として直せる
   function shiftBox(d, row, editable) {
     const boss = app.settings.managerName;
     const names = [...new Set([...(boss ? [boss] : []), ...st.staff.map(s => s.name), ...splitNames(row?.shiftPlan)])];
     if (!names.length) return h('div', { class: 'small muted2' }, 'シフトは、設定でスタッフを登録すると入れられます。');
     const members = new Set(splitNames(row?.shiftPlan));
-    let last = row?.lastPlan || '';
-    const lastBox = h('div');
-    const paintLast = () => {
-      const chosen = names.filter(x => members.has(x));
-      if (!chosen.includes(last)) last = '';
-      put(lastBox, chosen.length ? seg(chosen, last, v => { last = v; }) : h('div', { class: 'small muted2' }, '入る人を選ぶと、ラストを選べます。'));
-    };
-    paintLast();
     return h('div', { class: 'shift-box' },
       h('div', { class: 'lab' }, 'シフト（予定）'),
       h('div', { class: 'checks' }, names.map(nm => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: members.has(nm), disabled: !editable, onchange: ev => { ev.target.checked ? members.add(nm) : members.delete(nm); paintLast(); } }),
+        h('input', { type: 'checkbox', checked: members.has(nm), disabled: !editable, onchange: ev => { ev.target.checked ? members.add(nm) : members.delete(nm); } }),
         h('span', {}, nm)))),
-      h('div', { class: 'lab' }, 'ラスト（予定）'), lastBox,
       editable ? h('button', {
         class: 'btn btn-sm', onclick: async () => {
-          await app.sync.save('days', d, { bizDate: d, shiftPlan: names.filter(x => members.has(x)).join('、'), lastPlan: last });
+          await app.sync.save('days', d, { bizDate: d, shiftPlan: names.filter(x => members.has(x)).join('、') });
           toast('シフトを保存しました');
         }
       }, 'シフトを保存') : null);

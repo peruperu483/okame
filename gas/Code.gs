@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.12.0';
+var APP_VERSION = '0.13.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -63,8 +63,7 @@ var TABLES = {
     sheet: '営業日', read: 'open', write: 'staff', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['closed', '店休日', 'b'],
-      ['shiftPlan', 'シフト予定', 't'], ['lastPlan', 'ラスト予定', 't'],
-      ['shiftActual', 'シフト実績', 't'], ['lastActual', 'ラスト実績', 't'],
+      ['shiftPlan', 'シフト予定', 't'], ['shiftActual', 'シフト実績', 't'],
       ['openCash', '開店時の現金（手入力）', 'n']
     ].concat(COMMON_TAIL)
   },
@@ -155,7 +154,7 @@ var DEFAULT_SETTINGS = {
   managerFee: 0, // 店長報酬（月額）。金額は設定で入れる（コードには持たない）。店長だけが見られる（バイトには返さない）
   managerName: '岡本', // 店長の名前。シフトの選び方（アプリの予定・閉店・スプシの月のタブ）に出る
   monthlyTargets: {}, // 月ごとの売上目標（'2026-11': 1200000 の形）。ない月は targets.monthlySales
-  // 月のタブのシフトのプルダウン：列2・列3・列4の選択肢。列5とラストは、店長とスタッフ（と「店休日」）
+  // 月のタブのシフトのプルダウン：列2・列3・列4の選択肢。列5は、店長とスタッフと「店休日」
   shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']]
 };
 
@@ -200,6 +199,7 @@ function onOpen() {
     .addItem('暗証番号を作り直す', 'resetPin')
     .addSeparator()
     .addItem('管理シートから取り込む（9月・10月）', 'importLegacy')
+    .addItem('管理シートのシフトとイベントを予定に取り込む（9月・10月）', 'importLegacyPlans')
     .addItem('月次を作り直す', 'buildMonthlySheet')
     .addItem('来月のタブを作る', 'createNextMonthTab')
     .addItem('月のタブを作り直す（11月以降）', 'buildAppMonthTabs')
@@ -232,6 +232,7 @@ function findTestRows_() {
       var d = String(r[def.dateKey] || '').slice(0, 10);
       var isTestName = !!TEST_NAME_KEY[key] && /^テスト/.test(String(r[TEST_NAME_KEY[key]] || ''));
       var beforeGoLive = CLEANUP_BY_DATE.indexOf(key) >= 0 && goLive && d && d < goLive.slice(0, d.length);
+      if (key === 'days' && r.memo === LEGACY_PLAN_MARK) return; // 管理シートから取り込んだ予定（9月・10月のシフト）は消さない
       if (isTestName || r.trial === true || beforeGoLive) rows.push(i + 2);
     });
     return { key: key, sheet: def.sheet, rows: rows };
@@ -289,6 +290,7 @@ function setup() {
   ensureSettingsSheet_(ss);
   var trigMsg = ensureTriggers_();
   removeOldReconcileTab_(ss);
+  removeLastColumns_(ss);
   var handMsg = autoHandTab_();
   var blank = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
@@ -362,7 +364,7 @@ function protect_(sh, unprotected) {
   var others = p.getEditors().filter(function (u) { return u.getEmail() !== me.getEmail(); });
   if (others.length) p.removeEditors(others);
   if (p.canDomainEdit()) p.setDomainEdit(false);
-  if (unprotected) p.setUnprotectedRanges(unprotected); // 店長もスプシで打てる範囲（月のタブのシフト・ラスト・イベント）
+  if (unprotected) p.setUnprotectedRanges(unprotected); // 店長もスプシで打てる範囲（月のタブのシフト・イベント・見込み）
 }
 
 function ensureSettingsSheet_(ss) {
@@ -1002,12 +1004,13 @@ function blankRow_() { var r = []; for (var i = 0; i < 18; i++) r.push(''); retu
 
 /**
  * 1か月分のタブを作る。days は parseLegacyTab_ か appMonthDays_ の結果。today までの日だけ金額が入る
- * isApp（11月以降のタブ）：あれば作り直さず中身だけ書き換える。団体及びイベントの横に「見込み」、右端に「ラスト」の列があり、
- * シフト・団体及びイベント・見込み・ラストをスプシから打てる範囲にする。作るときは「シフト表のひな形」をコピーする
+ * isApp（11月以降のタブ）：あれば作り直さず中身だけ書き換える。団体及びイベントの横に「見込み」の列があり、
+ * シフト・団体及びイベント・見込みをスプシから打てる範囲にする。作るときは「シフト表のひな形」をコピーする
  */
 function writeMonthTab_(ss, tpl, label, month, days, isApp) {
   var sh = ss.getSheetByName(label);
   if (sh && isApp && String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') { ss.deleteSheet(sh); sh = null; } // 古い形のタブは作り直す
+  if (sh && isApp) removeLastColumn_(sh);
   var width = isApp ? 19 : 18;
   if (sh && isApp) {
     sh.getRange(2, 1, MONTH_ROWS, width).setBackground(null); // 塗りは付け直す（タブそのものは作り直さない）
@@ -1020,9 +1023,9 @@ function writeMonthTab_(ss, tpl, label, month, days, isApp) {
   var byDate = {};
   days.forEach(function (d) { byDate[d.date] = d; });
   var n = daysInMonth_(month);
-  var values = [], lasts = [], marks = [];
+  var values = [], marks = [];
   for (var i = 0; i < MONTH_ROWS; i++) {
-    var row = blankRow_(), last = '', expected = '';
+    var row = blankRow_(), expected = '';
     if (i < n) {
       var date = month + '-' + pad2_(i + 1), d = byDate[date];
       row[0] = i + 1; row[1] = dowOf_(date);
@@ -1037,22 +1040,17 @@ function writeMonthTab_(ss, tpl, label, month, days, isApp) {
         }
         var fx = d.fixed || {};
         row[15] = fx['家賃電気'] || (money ? 0 : ''); row[16] = fx['ガス・カラオケ・Wi-Fi・電話'] || (money ? 0 : ''); row[17] = fx['保険'] || (money ? 0 : '');
-        last = d.last || '';
         expected = d.expected || '';
         var bg = d.bg || {};
         (bg.shift || []).forEach(function (c, k) { if (c) marks.push([i + 2, 3 + k, c]); });
         if (bg.event) marks.push([i + 2, 7, bg.event]);
       }
     }
-    values.push(isApp ? row.slice(0, 7).concat([expected], row.slice(7)) : row); lasts.push([last]);
+    values.push(isApp ? row.slice(0, 7).concat([expected], row.slice(7)) : row);
   }
   sh.getRange(1, 1).setValue(label);
-  if (isApp) { // 予定の名前に「=」で始まる文字があっても、数式にしない（シフト・団体及びイベント・ラストは書式なしテキスト）
-    sh.getRange(2, 3, MONTH_ROWS, 5).setNumberFormat('@');
-    sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setNumberFormat('@');
-  }
+  if (isApp) sh.getRange(2, 3, MONTH_ROWS, 5).setNumberFormat('@'); // 予定の名前に「=」で始まる文字があっても、数式にしない（シフト・団体及びイベントは書式なしテキスト）
   sh.getRange(2, 1, MONTH_ROWS, width).setValues(values);
-  if (isApp) sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setValues(lasts);
   marks.forEach(function (m) { sh.getRange(m[0], m[1]).setBackground(m[2]); });
   if (tpl.how === 'plain') { // 曜日（と、管理シートの月ではシフトの名前）に、チップの代わりの色を付ける
     for (var r = 0; r < MONTH_ROWS; r++) {
@@ -1287,15 +1285,15 @@ function getMonthTemplate_(ss) {
 function splitNames_(s) { return String(s || '').split(/[、,，\s]+/).filter(String); }
 
 /**
- * その月の、シフト・ラスト・店休日・イベント・見込みの名前（日付 → 中身）。
- * シフトとラストは、実績があれば実績、なければ予定。イベントは予定の名前に、予定にない実際の入店のイベントの名前を足す
+ * その月の、シフト・店休日・イベント・見込みの名前（日付 → 中身）。
+ * シフトは、実績があれば実績、なければ予定。イベントは予定の名前に、予定にない実際の入店のイベントの名前を足す
  * （予定のイベントと同じ組なら、名前は1つにまとめる）。見込みは、その日の予定の「見込みの金額」の合計
  */
 function appPlanByDate_(month, settings) {
   var goLive = String(settings.goLiveDate || '');
   var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
   var out = {};
-  var at = function (d) { return out[d] = out[d] || { shiftCells: ['', '', '', ''], last: '', closed: false, event: '', expected: '' }; };
+  var at = function (d) { return out[d] = out[d] || { shiftCells: ['', '', '', ''], closed: false, event: '', expected: '' }; };
   var titles = {}, plannedIds = {}, expected = {};
   readTable_(TABLES.events).rows.forEach(function (e) {
     if (e.status === '削除' || !e.title || !inMonth(e.date)) return;
@@ -1314,7 +1312,6 @@ function appPlanByDate_(month, settings) {
   readTable_(TABLES.days).rows.forEach(function (r) {
     if (!inMonth(r.bizDate)) return;
     var f = at(r.bizDate);
-    f.last = String(r.lastActual || r.lastPlan || '');
     if (r.closed === true) { f.closed = true; f.shiftCells = ['店休日', '', '', '']; return; }
     var names = splitNames_(r.shiftActual || r.shiftPlan);
     names.sort(function (a, b) { return (a === boss ? 0 : 1) - (b === boss ? 0 : 1); });
@@ -1393,7 +1390,7 @@ function appMonthDays_(month, settings) {
   var today = serverBizDate_(settings);
   var byDate = {};
   var at = function (d, money) {
-    var f = byDate[d] = byDate[d] || { date: d, shiftCells: ['', '', '', ''], last: '', closed: false, event: '', expected: '', laborKana: 0, laborOther: 0, cash: 0, group: 0,
+    var f = byDate[d] = byDate[d] || { date: d, shiftCells: ['', '', '', ''], closed: false, event: '', expected: '', laborKana: 0, laborOther: 0, cash: 0, group: 0,
       cashless: 0, point: 0, food: 0, other: 0, fixed: {}, bg: {}, amounts: false };
     if (money) f.amounts = true;
     return f;
@@ -1419,7 +1416,7 @@ function appMonthDays_(month, settings) {
   var plan = appPlanByDate_(month, settings);
   Object.keys(plan).forEach(function (d) {
     var f = at(d), p = plan[d];
-    f.shiftCells = p.shiftCells; f.last = p.last; f.closed = p.closed; f.event = p.event; f.expected = p.expected;
+    f.shiftCells = p.shiftCells; f.closed = p.closed; f.event = p.event; f.expected = p.expected;
   });
   // 固定費は月に1回の入力なので、月の1日の行に入れる
   readTable_(TABLES.fixedCosts).rows.forEach(function (f) {
@@ -1430,16 +1427,14 @@ function appMonthDays_(month, settings) {
   return Object.keys(byDate).sort().map(function (d) { return byDate[d]; });
 }
 
-// 月のタブの C〜H・T（シフト・団体及びイベント・見込み・ラスト）に、最後に書いた（取り込んだ）内容を覚えておく。
+// 月のタブの C〜H（シフト・団体及びイベント・見込み）に、最後に書いた（取り込んだ）内容を覚えておく。
 // アプリの記録から書き換えるとき、覚えている内容と違うセルは、スプシで打たれたのに、まだアプリに入っていないもの（編集のトリガーが間に合わなかった・時間切れだった）。
 // それを先にアプリへ入れてから書き換えるので、打った内容が消えない
 var PLAN_SNAP = 'PLANSNAP:';
 
-/** C〜H と T を、7列（列2〜列5・団体及びイベント・見込み・ラスト）×31行の文字にして返す */
+/** C〜H を、6列（列2〜列5・団体及びイベント・見込み）×31行の文字にして返す */
 function planGrid_(sh) {
-  var main = sh.getRange(2, 3, MONTH_ROWS, 6).getValues();
-  var last = sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).getValues();
-  return main.map(function (r, i) { return r.concat([last[i][0]]).map(function (v) { return v == null ? '' : String(v); }); });
+  return sh.getRange(2, 3, MONTH_ROWS, 6).getValues().map(function (r) { return r.map(function (v) { return v == null ? '' : String(v); }); });
 }
 
 function savePlanSnapshot_(month, sh) {
@@ -1461,7 +1456,6 @@ function updatePlanSnapshotCells_(month, sh, rowFrom, rowTo, what) {
     if (what.shift) for (var c = 0; c < 4; c++) snap[r][c] = now[r][c];
     if (what.event) snap[r][4] = now[r][4];
     if (what.expected) snap[r][5] = now[r][5];
-    if (what.last) snap[r][6] = now[r][6];
   }
   try { PropertiesService.getScriptProperties().setProperty(PLAN_SNAP + month, JSON.stringify(snap)); } catch (e) { /* 覚えられなくても先へ */ }
 }
@@ -1474,8 +1468,8 @@ function ingestSheetPlanEdits_(month, sh, settings) {
   for (var i = 0; i < days; i++) {
     var a = snap[i], b = grid[i];
     if (!a) continue;
-    var what = { shift: [0, 1, 2, 3].some(function (k) { return a[k] !== b[k]; }), event: a[4] !== b[4], expected: a[5] !== b[5], last: a[6] !== b[6] };
-    if (!what.shift && !what.event && !what.expected && !what.last) continue;
+    var what = { shift: [0, 1, 2, 3].some(function (k) { return a[k] !== b[k]; }), event: a[4] !== b[4], expected: a[5] !== b[5] };
+    if (!what.shift && !what.event && !what.expected) continue;
     pushPlanFromSheet_(sh, month, i + 2, i + 2, what, settings);
     count++;
   }
@@ -1489,7 +1483,7 @@ function rebuildAppMonthTab_(month) {
   var label = appTabName_(ss, month);
   var old = appTab_(ss, month);
   var existed = !!old;
-  if (old) ingestSheetPlanEdits_(month, old, settings); // スプシで打って、まだアプリに入っていないものを、書き換える前に取り込む
+  if (old) { removeLastColumn_(old); ingestSheetPlanEdits_(month, old, settings); } // スプシで打って、まだアプリに入っていないものを、書き換える前に取り込む
   var tpl = getPlanTemplate_(ss);
   var sh = writeMonthTab_(ss, tpl, label, month, appMonthDays_(month, settings), true);
   copyValidationsFromTemplate_(sh, tpl.sheet);
@@ -1498,27 +1492,25 @@ function rebuildAppMonthTab_(month) {
   return label;
 }
 
-/** シフト・ラスト・店休日・イベント・見込みの列だけ、アプリの内容に書き換える（アプリの予定を直したとき。金額は触らない） */
+/** シフト・店休日・イベント・見込みの列だけ、アプリの内容に書き換える（アプリの予定を直したとき。金額は触らない） */
 function refreshPlanColumns_(month) {
   var ss = SpreadsheetApp.getActive();
   var sh = appTab_(ss, month);
   if (!sh) return false;
   if (String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') { rebuildAppMonthTab_(month); return true; } // 古い形のタブは作り直す
   var settings = getSettings_();
+  if (removeLastColumn_(sh)) protectPlanTab_(sh);
   ingestSheetPlanEdits_(month, sh, settings); // スプシで打って、まだアプリに入っていないものを、書き換える前に取り込む
   var plan = appPlanByDate_(month, settings);
   var n = daysInMonth_(month);
-  var cells = [], lasts = [];
+  var cells = [];
   for (var i = 0; i < MONTH_ROWS; i++) {
     var p = i < n ? plan[month + '-' + pad2_(i + 1)] : null;
     var sc = p ? p.shiftCells : ['', '', '', ''];
     cells.push([sc[0], sc[1], sc[2], sc[3], p ? p.event : '', p ? p.expected : '']);
-    lasts.push([p ? p.last : '']);
   }
   sh.getRange(2, 3, MONTH_ROWS, 5).setNumberFormat('@'); // 予定の名前に「=」で始まる文字があっても、数式にしない
   sh.getRange(2, 3, MONTH_ROWS, 6).setValues(cells);
-  sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setNumberFormat('@');
-  sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setValues(lasts);
   savePlanSnapshot_(month, sh);
   return true;
 }
@@ -1546,7 +1538,7 @@ function createNextMonthTab_() {
 function createNextMonthTab() {
   var label = createNextMonthTab_();
   notify_(label
-    ? '「' + label + '」のタブを作りました。シフト・ラスト・店休日・団体及びイベントは、このタブから打てます（アプリの予定にも入ります）。'
+    ? '「' + label + '」のタブを作りました。シフト・店休日・団体及びイベントは、このタブから打てます（アプリの予定にも入ります）。'
     : '来月は、運用開始日より前か管理シートの月なので、タブは作りません。');
 }
 
@@ -1576,7 +1568,27 @@ function ensureTriggers_() {
 // ひな形は、なければ作るだけで、あとからGASが書き換えることはない（色を消さないため）
 var PLAN_TPL_SHEET = 'シフト表のひな形';
 var APP_EXPECT_COL = 8;  // H：見込み（団体及びイベントの売上見込み）
-var APP_LAST_COL = 20;   // T：ラスト
+var OLD_LAST_COL = 20;   // 前の版の T「ラスト」（2026-10-16 になくした。右端の列なので、消してもほかの列はずれない）
+
+/** 前の版の「ラスト」の列（T）があれば消す。消したら true */
+function removeLastColumn_(sh) {
+  if (!sh || sh.getMaxColumns() < OLD_LAST_COL || String(sh.getRange(1, OLD_LAST_COL).getValue()) !== 'ラスト') return false;
+  sh.deleteColumn(OLD_LAST_COL);
+  return true;
+}
+
+/** 初期設定：シフト表のひな形と、11月以降のアプリのタブから「ラスト」の列を消す。営業日の表のラストの列（値）も消す */
+function removeLastColumns_(ss) {
+  removeLastColumn_(ss.getSheetByName(PLAN_TPL_SHEET));
+  planMonths_(getSettings_()).forEach(function (m) {
+    var sh = appTab_(ss, m);
+    if (removeLastColumn_(sh)) { protectPlanTab_(sh); savePlanSnapshot_(m, sh); }
+  });
+  var days = ss.getSheetByName(TABLES.days.sheet);
+  if (!days || !days.getLastColumn()) return;
+  var head = days.getRange(1, 1, 1, days.getLastColumn()).getValues()[0].map(String);
+  for (var c = head.length; c >= 1; c--) if (head[c - 1] === 'ラスト予定' || head[c - 1] === 'ラスト実績') days.deleteColumn(c);
+}
 
 function planNames_(settings) {
   var names = [];
@@ -1598,13 +1610,12 @@ function shiftChoiceLists_(settings) {
 function applyDefaultPlanValidations_(sh, settings) {
   var rule = function (list) { return SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true).build(); };
   shiftChoiceLists_(settings).forEach(function (list, i) { sh.getRange(2, 3 + i, MONTH_ROWS, 1).setDataValidation(rule(list)); });
-  sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setDataValidation(rule(planNames_(settings)));
 }
 
-/** シフト表のひな形。なければ、月のひな形をコピーして作る（見込み・ラストの列を足し、プルダウンの選択肢を入れる） */
+/** シフト表のひな形。なければ、月のひな形をコピーして作る（見込みの列を足し、プルダウンの選択肢を入れる） */
 function getPlanTemplate_(ss) {
   var sh = ss.getSheetByName(PLAN_TPL_SHEET);
-  if (sh) return { sheet: sh, how: PropertiesService.getScriptProperties().getProperty('MONTH_TPL_HOW') || 'plain' };
+  if (sh) { removeLastColumn_(sh); return { sheet: sh, how: PropertiesService.getScriptProperties().getProperty('MONTH_TPL_HOW') || 'plain' }; }
   var base = getMonthTemplate_(ss);
   sh = base.sheet.copyTo(ss);
   sh.setName(PLAN_TPL_SHEET);
@@ -1615,7 +1626,7 @@ function getPlanTemplate_(ss) {
   return { sheet: sh, how: base.how };
 }
 
-/** 11月以降のタブの形にする：H に「見込み」を足し（管理シートの形の H〜R は右へずれる）、T に「ラスト」を足す */
+/** 11月以降のタブの形にする：H に「見込み」を足す（管理シートの形の H〜R は右へずれて I〜S） */
 function ensureAppColumns_(sh) {
   if (String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') {
     sh.insertColumnAfter(7);
@@ -1623,26 +1634,18 @@ function ensureAppColumns_(sh) {
     sh.getRange(2, APP_EXPECT_COL, MONTH_ROWS + 1, 1).clearContent().setNumberFormat(YEN_FORMAT);
     sh.getRange(MONTH_ROWS + 2, APP_EXPECT_COL).setFormula('=SUM(H2:H' + (MONTH_ROWS + 1) + ')');
   }
-  if (String(sh.getRange(1, APP_LAST_COL).getValue()) !== 'ラスト') {
-    if (sh.getMaxColumns() < APP_LAST_COL) sh.insertColumnsAfter(sh.getMaxColumns(), APP_LAST_COL - sh.getMaxColumns());
-    sh.getRange(1, 6, MONTH_ROWS + 2, 1).copyTo(sh.getRange(1, APP_LAST_COL, MONTH_ROWS + 2, 1)); // 列 5 と同じ書式
-    sh.getRange(1, APP_LAST_COL).setValue('ラスト');
-  }
   sh.getRange(2, 3, MONTH_ROWS, 5).setNumberFormat('@');
-  sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1).setNumberFormat('@');
-  var widths = MONTH_WIDTHS.slice(0, 7).concat([90], MONTH_WIDTHS.slice(7), [100]);
+  var widths = MONTH_WIDTHS.slice(0, 7).concat([90], MONTH_WIDTHS.slice(7));
   widths.forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
   var bands = sh.getBandings();
-  if (bands.length) bands[0].setRange(sh.getRange(1, 1, MONTH_ROWS + 2, APP_LAST_COL));
+  if (bands.length) bands[0].setRange(sh.getRange(1, 1, MONTH_ROWS + 2, 19));
 }
 
-/** ひな形のプルダウン（色つき）を、月のタブに写す（列2〜列5とラスト） */
+/** ひな形のプルダウン（色つき）を、月のタブに写す（列2〜列5） */
 function copyValidationsFromTemplate_(sh, tplSheet) {
   if (typeof SpreadsheetApp.CopyPasteType === 'undefined') return;
   var type = SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION;
-  [[3, 4], [APP_LAST_COL, 1]].forEach(function (c) {
-    tplSheet.getRange(2, c[0], MONTH_ROWS, c[1]).copyTo(sh.getRange(2, c[0], MONTH_ROWS, c[1]), type, false);
-  });
+  tplSheet.getRange(2, 3, MONTH_ROWS, 4).copyTo(sh.getRange(2, 3, MONTH_ROWS, 4), type, false);
 }
 
 /** スプシのメニュー：ひな形のプルダウンの色を、今ある11月以降のタブにも写す */
@@ -1658,15 +1661,14 @@ function syncPlanColors() {
   notify_(labels.length ? 'プルダウンの色を写しました（' + labels.join('・') + '）。' : '写すタブがありません（11月以降のタブは、まだありません）。');
 }
 
-/** 月のタブの保護：金額の列と合計の行は保護のまま。シフト（C〜F）・団体及びイベント（G）・見込み（H）・ラスト（T）だけ、スプシから打てる */
+/** 月のタブの保護：金額の列と合計の行は保護のまま。シフト（C〜F）・団体及びイベント（G）・見込み（H）だけ、スプシから打てる */
 function protectPlanTab_(sh) {
-  protect_(sh, [sh.getRange(2, 3, MONTH_ROWS, 6), sh.getRange(2, APP_LAST_COL, MONTH_ROWS, 1)]);
+  protect_(sh, [sh.getRange(2, 3, MONTH_ROWS, 6)]);
 }
 
 /**
- * スプシで打ったシフト・ラスト・店休日・団体及びイベント・見込みを、アプリの予定に入れる（スプシの編集のトリガー。林の権限で動く）
+ * スプシで打ったシフト・店休日・団体及びイベント・見込みを、アプリの予定に入れる（スプシの編集のトリガー。林の権限で動く）
  * - シフト（C〜F）→ 営業日の「シフト（予定）」。「店休日」を選んだ日は店休日に
- * - ラスト（T）→ 「ラスト（予定）」
  * - 団体及びイベント（G）→ 予定。名前が増えたら足し、消えたら削除にする（時間・人数は空）
  * - 見込み（H）→ その日の予定の「見込みの金額」（予定が複数ある日は、先頭の予定に合わせる。予定がない日は「イベント」を足す）
  */
@@ -1682,8 +1684,8 @@ function handleSheetEdit(e) {
     var r1 = e.range.getRow(), r2 = r1 + e.range.getNumRows() - 1;
     var c1 = e.range.getColumn(), c2 = c1 + e.range.getNumColumns() - 1;
     var hit = function (a, b) { return c1 <= b && c2 >= a; };
-    var what = { shift: hit(3, 6), event: hit(7, 7), expected: hit(APP_EXPECT_COL, APP_EXPECT_COL), last: hit(APP_LAST_COL, APP_LAST_COL) };
-    if (!what.shift && !what.event && !what.expected && !what.last) return;
+    var what = { shift: hit(3, 6), event: hit(7, 7), expected: hit(APP_EXPECT_COL, APP_EXPECT_COL) };
+    if (!what.shift && !what.event && !what.expected) return;
     var from = Math.max(r1, 2), to = Math.min(r2, 1 + daysInMonth_(month));
     if (from > to) return;
     withLock_(function () {
@@ -1717,6 +1719,7 @@ function catchUpSheetEdits_(settings, force) {
   planMonths_(settings).forEach(function (m) {
     var sh = appTab_(ss, m);
     if (!sh || String(sh.getRange(1, APP_EXPECT_COL).getValue()) !== '見込み') return;
+    if (removeLastColumn_(sh)) protectPlanTab_(sh);
     if (!readPlanSnapshot_(m)) { savePlanSnapshot_(m, sh); return; } // 覚えていない（前の版で作ったタブ）：今の内容を覚えるだけ
     var n = ingestSheetPlanEdits_(m, sh, settings);
     if (n) savePlanSnapshot_(m, sh);
@@ -1758,7 +1761,6 @@ function checkSheetSync() {
 function pushPlanFromSheet_(sh, month, rowFrom, rowTo, what, settings) {
   var count = rowTo - rowFrom + 1;
   var cells = sh.getRange(rowFrom, 3, count, 6).getValues(); // C〜H
-  var lasts = what.last ? sh.getRange(rowFrom, APP_LAST_COL, count, 1).getValues() : null;
   var now = nowIso_();
   var ctx = { mgr: true, settings: settings, deviceId: 'spreadsheet', by: 'スプシ', force: true };
   var eventRows = (what.event || what.expected) ? readTable_(TABLES.events).rows : [];
@@ -1773,14 +1775,13 @@ function pushPlanFromSheet_(sh, month, rowFrom, rowTo, what, settings) {
       data.closed = names.indexOf('店休日') >= 0;
       data.shiftPlan = names.filter(function (x) { return x !== '店休日'; }).join('、');
     }
-    if (what.last) data.lastPlan = String(lasts[i][0] == null ? '' : lasts[i][0]).trim();
-    if (what.shift || what.last) dayOps.push({ opId: 'sheet-' + date + '-' + now, id: date, data: data });
+    if (what.shift) dayOps.push({ opId: 'sheet-' + date + '-' + now, id: date, data: data });
     if (what.event || what.expected) {
       var rowOps = what.event ? eventOpsFromCell_(date, row[4], eventRows, settings, now) : [];
       eventOps = eventOps.concat(rowOps);
       if (what.expected) eventOps = eventOps.concat(expectedOpsFromCell_(date, row[5], liveEventsAfter_(date, eventRows, rowOps), settings, now));
     }
-    after[date] = { shift: data.shiftPlan, closed: data.closed, last: data.lastPlan, event: what.event ? String(row[4] || '') : undefined, expected: what.expected ? row[5] : undefined };
+    after[date] = { shift: data.shiftPlan, closed: data.closed, event: what.event ? String(row[4] || '') : undefined, expected: what.expected ? row[5] : undefined };
   }
   if (dayOps.length) upsert_('days', dayOps, ctx);
   if (eventOps.length) upsert_('events', eventOps, ctx);
@@ -1894,20 +1895,27 @@ function rebuildTabsAfterSync_(ops) {
   }
 }
 
-/** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
-function importLegacy() {
-  var ui = SpreadsheetApp.getUi();
+/** 管理シートを開く（URLを聞く。2回目からは覚えている）。やめたら・開けなければ null */
+function openLegacySource_(ui, title) {
   var props = PropertiesService.getScriptProperties();
   var url = props.getProperty('LEGACY_URL');
-  var ask = !url || ui.alert('管理シートから取り込む', '前と同じ管理シートから取り込みますか？\n（「いいえ」で、URLを入れ直します）', ui.ButtonSet.YES_NO) !== ui.Button.YES;
+  var ask = !url || ui.alert(title, '前と同じ管理シートから取り込みますか？\n（「いいえ」で、URLを入れ直します）', ui.ButtonSet.YES_NO) !== ui.Button.YES;
   if (ask) {
-    var r = ui.prompt('管理シートから取り込む', '管理シート「シフト及び売上等」のURLを貼ってください。', ui.ButtonSet.OK_CANCEL);
-    if (r.getSelectedButton() !== ui.Button.OK || !r.getResponseText().trim()) { ui.alert('やめました。'); return; }
+    var r = ui.prompt(title, '管理シート「シフト及び売上等」のURLを貼ってください。', ui.ButtonSet.OK_CANCEL);
+    if (r.getSelectedButton() !== ui.Button.OK || !r.getResponseText().trim()) { ui.alert('やめました。'); return null; }
     url = r.getResponseText().trim();
   }
   var source;
-  try { source = SpreadsheetApp.openByUrl(url); } catch (e) { ui.alert('管理シートを開けませんでした。URLを確かめてください。\n' + e.message); return; }
+  try { source = SpreadsheetApp.openByUrl(url); } catch (e) { ui.alert('管理シートを開けませんでした。URLを確かめてください。\n' + e.message); return null; }
   props.setProperty('LEGACY_URL', url);
+  return source;
+}
+
+/** スプシのメニュー：管理シートのURLを聞いて（2回目からは覚えている）、9月・10月を取り込む */
+function importLegacy() {
+  var ui = SpreadsheetApp.getUi();
+  var source = openLegacySource_(ui, '管理シートから取り込む');
+  if (!source) return;
   var today = serverBizDate_(getSettings_());
   var res = withLock_(function () { return importLegacy_(source, today); });
   ui.alert('取り込みました（' + today + ' まで）\n\n' + res.map(function (x) {
@@ -1915,6 +1923,87 @@ function importLegacy() {
     return x.tab + '：' + x.days + '日分（' + x.until + '）・売上 ' + Number(x.sales).toLocaleString() + '円' + (x.unknown.length ? '\n　読めなかった列：' + x.unknown.join('、') : '');
   }).join('\n') + '\n\n月のタブ（9月・10月）を' + (res[0] && res[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。'
     + '\n\nもう一度取り込んでも二重にはなりません（その月をまるごと置き換えます）。');
+}
+
+// ===== 管理シート（9月・10月）のシフトとイベントを、アプリの予定に入れる =====
+// 名前と予定だけ（金額・見込みは入れない）。9月・10月は運用開始日より前なので、売上・月次・カウンターには効かない（月次は管理シートの数字）。
+// 何度実行しても二重にならない：営業日はID＝日付で上書き、イベントはID＝'lg-日付-名前'。管理シートから消えたイベントは削除にする。
+// 取り込んだ営業日の行はメモに印を付け、「テストの行を消す」で消さない
+var LEGACY_PLAN_MARK = '管理シートの予定から';
+var LEGACY_PLAN_SHIFT_COLS = 3; // シフトの欄のうち取り込む列（列2〜列4の3人分。2026-10-16 林の指示。列5は取り込まない）
+
+/** 取り込む（ロックの中で呼ぶ）。件数を返す */
+function importLegacyPlans_(source) {
+  var settings = getSettings_();
+  var now = nowIso_();
+  var ctx = { mgr: true, settings: settings, deviceId: 'kanri-import', by: '管理シートの取り込み', force: true };
+  var dayRows = {};
+  readTable_(TABLES.days).rows.forEach(function (r) { dayRows[String(r.id)] = r; });
+  var eventRows = readTable_(TABLES.events).rows;
+  var eventById = {};
+  eventRows.forEach(function (e) { eventById[String(e.id)] = e; });
+  var type = (settings.eventTypes || [])[0] || '団体';
+  var dayOps = [], eventOps = [], keep = {}, months = [];
+  var res = { tabs: [], days: 0, people: 0, closedDays: 0, events: 0, removed: 0, skipped: [] };
+  Object.keys(LEGACY_TABS).forEach(function (tab) {
+    var month = LEGACY_TABS[tab];
+    var sh = source.getSheetByName(tab);
+    if (!sh) { res.tabs.push({ tab: tab, error: 'タブ「' + tab + '」が見つかりません' }); return; }
+    months.push(month);
+    var parsed = parseLegacyTab_(sh.getDataRange().getValues(), month, '9999-12-31', null); // 先の日（予定）も入れる
+    var t = { tab: tab, days: 0, people: 0, closedDays: 0, events: 0 };
+    parsed.days.forEach(function (d) {
+      var cells = d.shiftCells.slice(0, LEGACY_PLAN_SHIFT_COLS).filter(String);
+      var closed = cells.indexOf('店休日') >= 0;
+      var names = [];
+      cells.forEach(function (x) { if (x !== '店休日' && names.indexOf(x) < 0) names.push(x); });
+      d.shiftCells.slice(LEGACY_PLAN_SHIFT_COLS).forEach(function (x) { if (x) res.skipped.push(d.date + ' ' + x); });
+      var cur = dayRows[d.date];
+      if (names.length || closed || (cur && cur.memo === LEGACY_PLAN_MARK)) {
+        dayOps.push({ opId: 'lgp-' + d.date + '-' + now, id: d.date, data: { bizDate: d.date, shiftPlan: names.join('、'), closed: closed, memo: LEGACY_PLAN_MARK, updatedAt: now } });
+      }
+      if (names.length || closed) t.days += 1;
+      t.people += names.length;
+      if (closed) t.closedDays += 1;
+      var titles = [];
+      String(d.event || '').split(/[、,，\n]+/).forEach(function (x) { x = x.trim(); if (x && titles.indexOf(x) < 0) titles.push(x); });
+      titles.forEach(function (title) {
+        var id = 'lg-' + d.date + '-' + title;
+        keep[id] = true;
+        t.events += 1;
+        var data = { date: d.date, title: title, status: '有効', memo: LEGACY_PLAN_MARK, updatedAt: now };
+        if (!eventById[id]) { data.type = type; data.createdAt = now; }
+        eventOps.push({ opId: 'lge-' + id + '-' + now, id: id, data: data });
+      });
+    });
+    res.tabs.push(t);
+    res.days += t.days; res.people += t.people; res.closedDays += t.closedDays; res.events += t.events;
+  });
+  eventRows.forEach(function (e) { // 前に取り込んで、管理シートから消えたイベントは削除にする
+    var id = String(e.id);
+    if (id.indexOf('lg-') !== 0 || keep[id] || e.status === '削除' || months.indexOf(monthOf_(e.date)) < 0) return;
+    eventOps.push({ opId: 'lge-del-' + id + '-' + now, id: id, data: { status: '削除', updatedAt: now } });
+    res.removed += 1;
+  });
+  if (dayOps.length) upsert_('days', dayOps, ctx);
+  if (eventOps.length) upsert_('events', eventOps, ctx);
+  appendLog_({ type: '管理シートの予定を取り込む', table: 'days', targetId: months.join(','),
+    after: { days: res.days, people: res.people, closedDays: res.closedDays, events: res.events, removed: res.removed }, by: '管理シートの取り込み' }, ctx);
+  return res;
+}
+
+/** スプシのメニュー：管理シート（9月・10月）のシフトとイベントを、アプリの予定に入れる */
+function importLegacyPlans() {
+  var ui = SpreadsheetApp.getUi();
+  var source = openLegacySource_(ui, '管理シートのシフトとイベントを予定に取り込む');
+  if (!source) return;
+  var r = withLock_(function () { return importLegacyPlans_(source); });
+  ui.alert('アプリの予定に取り込みました（9月・10月。名前と予定だけ。金額は入れていません）\n\n' + r.tabs.map(function (t) {
+    return t.error ? t.tab + '：' + t.error
+      : t.tab + '：シフトのある日 ' + t.days + '日（うち店休日 ' + t.closedDays + '日）・シフトの人数 のべ' + t.people + '人・イベント ' + t.events + '件';
+  }).join('\n') + (r.removed ? '\n管理シートから消えていたイベント：' + r.removed + '件を削除にしました' : '')
+    + (r.skipped.length ? '\n\n列5（4人目の列）は取り込んでいません：' + r.skipped.join('、') : '')
+    + '\n\nもう一度実行しても二重にはなりません。');
 }
 
 // ===== 月次 =====

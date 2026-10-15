@@ -6,7 +6,7 @@ import {
   KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT,
   label, payLabel, total, methodSums, livePays, markAllDeleted, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
-import { pickReason, seg } from '../ui.js';
+import { pickReason } from '../ui.js';
 import { fmtMD, mountCountdown } from './common.js';
 
 const KIND_KEY = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
@@ -23,9 +23,9 @@ export function renderToday(root, app) {
   const from = () => addDays(day(), -31); // 開店時の現金を引き継ぐために、前の締めを探す範囲
   const st = {
     visits: [], moves: [], closings: [], dayRow: null, staff: [],
-    date: null, stale: [], membersKey: null, lastKey: null,
+    date: null, stale: [], membersKey: null,
     regForm: null, rOutKind: '買い出し', rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
-    counted: '', members: null, last: null, closeMsg: ''
+    counted: '', members: null, closeMsg: ''
   };
 
   const staleBox = h('div', { class: 'col-gap' });
@@ -76,7 +76,7 @@ export function renderToday(root, app) {
 
   // ===== 前の営業日の未締め・店内に残った組：気づけるように出して、その日を開いて閉店・精算できるようにする =====
   function openDay(d) {
-    Object.assign(st, { date: d, counted: '', touched: false, members: null, last: null, membersKey: null, lastKey: null, membersTouched: false, lastTouched: false, regForm: null, closeMsg: '', rMsg: '' });
+    Object.assign(st, { date: d, counted: '', touched: false, members: null, membersKey: null, membersTouched: false, regForm: null, closeMsg: '', rMsg: '' });
     load();
   }
   function paintStale() {
@@ -91,20 +91,19 @@ export function renderToday(root, app) {
       h('button', { class: 'btn btn-sm', onclick: () => openDay(x.date) }, 'その日を開く'))));
   }
 
-  // ===== 今日の出勤：シフト（予定）。閉店で実績が入ったら実績。ラストの担当も =====
+  // ===== 今日の出勤：シフト（予定）。閉店で実績が入ったら実績 =====
   function paintStaff() {
     const row = st.dayRow;
     const actual = splitNames(row?.shiftActual), plan = splitNames(row?.shiftPlan);
     const names = actual.length ? actual : plan;
     const boss = S().managerName;
     const ordered = [...names].sort((a, b) => (a === boss ? 0 : 1) - (b === boss ? 0 : 1));
-    const last = row?.lastActual || row?.lastPlan || '';
     put(staffBox,
       h('h2', {}, st.date ? `${fmtMD(st.date)}の出勤` : '今日の出勤'),
       row?.closed ? h('div', { class: 'muted2 pad' }, '今日は店休日です')
         : names.length ? [
-          h('div', { class: 'staff-chips' }, ordered.map(nm => h('span', { class: 'staff-chip' + (nm === last ? ' last' : '') }, nm, nm === last ? h('small', {}, 'ラスト') : null))),
-          h('div', { class: 'small muted2' }, (actual.length ? '実績（閉店で入れた分）' : 'シフトの予定') + (last && !names.includes(last) ? `　ラスト：${last}` : ''))]
+          h('div', { class: 'staff-chips' }, ordered.map(nm => h('span', { class: 'staff-chip' }, nm))),
+          h('div', { class: 'small muted2' }, actual.length ? '実績（閉店で入れた分）' : 'シフトの予定')]
           : h('div', { class: 'muted2 pad' }, 'まだ入っていません（予定の画面か、閉店のときに入れます）'));
   }
 
@@ -241,11 +240,7 @@ export function renderToday(root, app) {
     }
     const memberNames = [...new Set([...(S().managerName ? [S().managerName] : []), ...st.staff.map(x => x.name), ...splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan)])];
     const memberKey = st.dayRow?.shiftActual || st.dayRow?.shiftPlan || '';
-    const lastKey = st.dayRow?.lastActual || st.dayRow?.lastPlan || '';
     if (st.members == null || (!st.membersTouched && st.membersKey !== memberKey)) { st.members = new Set(splitNames(memberKey)); st.membersKey = memberKey; }
-    if (st.last == null || (!st.lastTouched && st.lastKey !== lastKey)) { st.last = lastKey; st.lastKey = lastKey; }
-    const chosen = memberNames.filter(n => st.members.has(n));
-    if (!chosen.includes(st.last)) st.last = '';
     const counted = st.counted;
     const diff = counted === '' ? null : Number(counted) - reg.expected;
 
@@ -272,9 +267,7 @@ export function renderToday(root, app) {
         h('div', { class: 'checks' }, memberNames.map(n => h('label', { class: 'check' },
           h('input', { type: 'checkbox', checked: st.members.has(n), onchange: e => { st.membersTouched = true; e.target.checked ? st.members.add(n) : st.members.delete(n); paintAll(); } }),
           h('span', {}, n)))),
-        st.dayRow?.shiftPlan ? h('div', { class: 'small muted2' }, `予定：${st.dayRow.shiftPlan}（違っていたら直してください）`) : null,
-        h('div', { class: 'lab' }, 'ラストの担当'),
-        chosen.length ? seg(chosen, st.last, v => { st.last = v; st.lastTouched = true; }) : h('div', { class: 'small muted2' }, '入った人を選ぶと、ここで選べます。')] : null,
+        st.dayRow?.shiftPlan ? h('div', { class: 'small muted2' }, `予定：${st.dayRow.shiftPlan}（違っていたら直してください）`) : null] : null,
       canEdit ? h('button', { class: 'btn btn-primary btn-close', disabled: inStore.length > 0 || reg.openCash == null, onclick: () => doClose(sum, reg, closing) }, closing ? '締め直す' : '閉店する') : h('div', { class: 'small' }, '前の日の締めは、店長モードで直せます。'),
       st.closeMsg ? h('div', { class: 'pay-msg good', role: 'status' }, st.closeMsg) : null,
       closing && !st.closeMsg ? h('div', { class: 'small accent' }, `${fmtHM(closing.closedAt)}に閉店しました（数えた現金 ${yen(closing.countedCash)}・差額 ${signedYen(Number(closing.diff) || 0)}）`) : null,
@@ -308,7 +301,7 @@ export function renderToday(root, app) {
     st.closeMsg = `閉店しました。差額 ${signedYen(data.diff)}。数えた ${yen(counted)} が次の営業日の開店時の現金になります`;
     await app.sync.save('closings', day(), data, closing ? { log: { type: '締めのやり直し', reason: '', before: closing, after: data } } : {});
     const names = [...st.members];
-    await app.sync.save('days', day(), { bizDate: day(), shiftActual: names.join('、'), lastActual: st.last || '' });
+    await app.sync.save('days', day(), { bizDate: day(), shiftActual: names.join('、') });
     toast(closing ? '締め直しました' : '閉店しました');
   }
 

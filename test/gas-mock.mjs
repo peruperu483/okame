@@ -170,6 +170,24 @@ class Sheet {
     this.maxCols += 1;
     return this;
   }
+  /** 列を消して、右の列を詰める（実物と同じく列数も減る） */
+  deleteColumn(col) {
+    const move = (map) => {
+      const next = new Map();
+      for (const [k, v] of map) {
+        const [r, c] = k.split(':').map(Number);
+        if (c === col) continue;
+        next.set(this._key(r, c > col ? c - 1 : c), v);
+      }
+      return next;
+    };
+    this.cells = move(this.cells);
+    this.formats = move(this.formats);
+    this.validations = move(this.validations);
+    this.bgs = move(this.bgs);
+    this.maxCols -= 1;
+    return this;
+  }
   /** 行を消して、下の行を詰める（実物と同じく行数も減る） */
   deleteRows(start, n) {
     const move = (map) => {

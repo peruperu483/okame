@@ -262,12 +262,12 @@ test('月のタブ：閉店のあとに入れた仕入れ・勤怠・固定費�
 });
 
 // ===== 中12：予定の名前の「=」を数式にしない =====
-test('月のタブのシフト・団体及びイベント・ラストの列は、書式なしテキスト（「=」で始まる名前が数式にならない）', () => {
+test('月のタブのシフト・団体及びイベントの列は、書式なしテキスト（「=」で始まる名前が数式にならない）', () => {
   const env = boot('2026-10-20T10:00:00+09:00');
   const mgrToken = env.login();
   env.gas.createNextMonthTab_();
   const sh = env.ss.getSheetByName('11月');
-  for (const [r, c] of [[2, 3], [32, 6], [2, 7], [20, 7], [2, 20]]) assert.equal(sh.formats.get(r + ':' + c), '@', r + ':' + c);
+  for (const [r, c] of [[2, 3], [32, 6], [2, 7], [20, 7]]) assert.equal(sh.formats.get(r + ':' + c), '@', r + ':' + c);
   assert.notEqual(sh.formats.get('2:8'), '@'); // 見込みは数字
   // ひな形のほうも
   assert.equal(env.ss.getSheetByName('シフト表のひな形').formats.get('2:7'), '@');

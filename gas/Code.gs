@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.11.0';
+var APP_VERSION = '0.11.1';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -1486,7 +1486,7 @@ function rebuildAppMonthTab_(month) {
   var sh = writeMonthTab_(ss, tpl, label, month, appMonthDays_(month, settings), true);
   copyValidationsFromTemplate_(sh, tpl.sheet);
   savePlanSnapshot_(month, sh);
-  if (!existed) arrangeTabs_(ss, monthTabNames_(ss, settings));
+  if (!existed || sh !== old) arrangeTabs_(ss, monthTabNames_(ss, settings)); // 新しく作った（古い形のタブを作り直した）ときは、タブの並びも直す
   return label;
 }
 

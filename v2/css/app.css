@@ -530,3 +530,6 @@ button { cursor: pointer; }
 .goal-edit .inline-add { align-items: center; }
 .target-row { gap: 8px; margin-bottom: 8px; }
 .tg-month { min-width: 110px; font-weight: 600; }
+.goal-left { display: flex; flex-direction: column; gap: 2px; }
+.goal-big { font-size: 24px; font-weight: 700; line-height: 1.2; }
+.goal-left.ok { font-size: 17px; font-weight: 700; color: var(--accent); }

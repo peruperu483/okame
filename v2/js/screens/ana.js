@@ -46,6 +46,16 @@ export function renderAna(root, app) {
     }
   }
 
+  // 目標までの残り：目標 − その月の確定した売上。見込み（まだ来ていない日のイベント）を入れた場合も小さく出す
+  function goalLeft(s, t) {
+    const left = t.monthlySales - s.sales;
+    if (left <= 0) return h('div', { class: 'goal-left ok' }, left === 0 ? '目標に届きました' : `目標を ${yen(-left)} 上回りました`);
+    const pend = Number(s.pendingExpected) || 0;
+    return h('div', { class: 'goal-left' },
+      h('div', { class: 'goal-big num' }, `目標まで あと ${yen(left)}`),
+      pend > 0 ? h('div', { class: 'small muted2' }, left - pend > 0 ? `見込みを入れると あと ${yen(left - pend)}` : `見込みを入れると 目標を ${yen(pend - left)} 上回ります`) : null);
+  }
+
   function paintMonthly(s, p) {
     const row = (k, v, cls = '') => h('div', { class: 'crow ' + cls }, h('span', {}, k), h('span', { class: 'num' }, v));
     const bars = (items, whole) => items.map(([k, v]) => h('div', { class: 'brow' },
@@ -71,7 +81,8 @@ export function renderAna(root, app) {
         h('div', { class: 'dcard' },
           h('div', { class: 'lab' }, '目標'),
           t.monthlySales ? [h('div', { class: 'small' }, `月の売上 ${yen(t.monthlySales)} の ${t.salesRate}%`),
-            h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: Math.min(100, t.salesRate) + '%' } }))] : null,
+            h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: Math.min(100, t.salesRate) + '%' } })),
+            goalLeft(s, t)] : null,
           h('div', { class: 'small' }, s.legacy ? `1日の来客：記録なし（目標 ${t.dailyGuests}名）` : `1日の来客 平均 ${t.avgGuestsPerDay}名（目標 ${t.dailyGuests}名）`),
           h('div', { class: 'small' }, `団体・イベント ${t.events}組` + (t.monthlyEvents ? `（目標 ${t.monthlyEvents}件）` : '') + (s.plannedEvents ? `・予定 ${s.plannedEvents}件` : ''))),
         h('div', { class: 'dcard' },

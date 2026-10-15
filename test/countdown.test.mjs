@@ -209,3 +209,20 @@ test('月のタブで選べるシフトの選択肢は、設定（shiftColumnCho
   const tpl = env.ss.getSheetByName('シフト表のひな形');
   assert.deepEqual([plain(tpl.validations.get('2:3').list), plain(tpl.validations.get('2:5').list)], [['店休日', '岡本'], ['優輝', 'みか']]);
 });
+
+test('月次（分析）：目標までの材料として、まだ来ていない日のイベントの見込みが付く。バイトに見せる設定とは関係ない', () => {
+  const env = boot('2026-11-05T20:00:00+09:00');
+  const mgrToken = env.login();
+  env.call('saveSettings', { mgrToken, settings: { monthlyTargets: { '2026-11': 1000000 }, visibility: { countdown: false } } });
+  env.sync(mgrToken, [
+    ['visits', 'v1', { bizDate: '2026-11-02', no: 1, people: 4, kind: '飲み放題', status: '退店', total: 400000, cash: 400000 }],
+    ['events', 'e1', { date: '2026-11-10', type: '団体', title: '日本酒の会', expectedAmount: 180000, status: '有効' }],
+    ['events', 'e2', { date: '2026-11-03', type: '団体', title: '過ぎた会', expectedAmount: 50000, status: '有効' }]
+  ]);
+  const m = env.call('monthly', { mgrToken, month: '2026-11' }).summary;
+  assert.deepEqual([m.sales, m.target.monthlySales, m.pendingExpected], [400000, 1000000, 180000]);
+  assert.equal(m.target.monthlySales - m.sales - m.pendingExpected, 420000); // 見込みを入れた「あと」
+  assert.equal(cd(env).code, 'forbidden'); // バイトの減算カウンターは見せない設定でも、月次には出る
+  // 見込みがない月
+  assert.equal(env.call('monthly', { mgrToken, month: '2026-12' }).summary.pendingExpected, 0);
+});

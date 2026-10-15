@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.10.0';
+var APP_VERSION = '0.10.1';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -424,7 +424,9 @@ function handle_(body) {
       requireMgr_(ctx);
       var month = String(body.month || '');
       if (!/^\d{4}-\d{2}$/.test(month)) fail_('bad_month', '月の形が違います（例：2026-11）。');
-      return ok_({ summary: monthlySummary_(month, settings), prev: monthlySummary_(prevMonth_(month), settings) });
+      var summary = monthlySummary_(month, settings);
+      summary.pendingExpected = pendingExpected_(month, settings); // まだ来ていない日のイベントの見込み（今日の画面の「あと」と同じ計算）
+      return ok_({ summary: summary, prev: monthlySummary_(prevMonth_(month), settings) });
     }
     case 'countdown': {
       if (!canAccess_('countdown', ctx)) fail_('forbidden', 'この表示は今は見られません。');

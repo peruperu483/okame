@@ -28,6 +28,16 @@ class Range {
     fs2.forEach((row, i) => row.forEach((f, j) => this.sheet._fmt(this.r + i, this.c + j, f)));
     return this;
   }
+  getValue() { return this.sheet._get(this.r, this.c); }
+  getRow() { return this.r; }
+  getColumn() { return this.c; }
+  getNumRows() { return this.nr; }
+  getNumColumns() { return this.nc; }
+  getSheet() { return this.sheet; }
+  setDataValidation(rule) {
+    for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sheet.validations.set(this.sheet._key(this.r + i, this.c + j), rule);
+    return this;
+  }
   setFontWeight() { return this; }
   setFontSize() { return this; }
   setFontColor() { return this; }
@@ -84,7 +94,7 @@ class Range {
 }
 
 class Sheet {
-  constructor(name) { this.name = name; this.cells = new Map(); this.formats = new Map(); this.bgs = new Map(); this.bandings = []; this.hidden = false; this.maxRows = 1000; this.maxCols = 26; }
+  constructor(name) { this.name = name; this.cells = new Map(); this.formats = new Map(); this.bgs = new Map(); this.bandings = []; this.validations = new Map(); this.condRules = []; this.hidden = false; this.maxRows = 1000; this.maxCols = 26; }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
   hideSheet() { this.hidden = true; return this; }
@@ -93,6 +103,8 @@ class Sheet {
   setRowHeight() { return this; }
   setColumnWidth() { return this; }
   getBandings() { return this.bandings; }
+  setConditionalFormatRules(rules) { this.condRules = rules; }
+  getConditionalFormatRules() { return this.condRules; }
   // 別のスプレッドシートへコピー（元の名前に「のコピー」が付く。実物と同じ）
   copyTo(dest) {
     const s = dest.insertSheet(this.name + ' のコピー');
@@ -144,6 +156,7 @@ class Sheet {
     };
     this.cells = move(this.cells);
     this.formats = move(this.formats);
+    this.validations = move(this.validations);
     this.bgs = move(this.bgs);
     this.maxRows -= n;
   }
@@ -157,6 +170,8 @@ class Sheet {
       addEditor: u => { editors.add(u.getEmail()); },
       removeEditors: us => { us.forEach(u => editors.delete(u.getEmail())); },
       getEditors: () => [...editors].map(e => ({ getEmail: () => e })),
+      setUnprotectedRanges(r) { this.unprotected = r; return this; },
+      getUnprotectedRanges() { return this.unprotected || []; },
       canDomainEdit: () => domain,
       setDomainEdit: v => { domain = v; }
     };
@@ -178,6 +193,7 @@ export function loadGas(file) {
   const props = new Map();
   const cache = new Map();
   const logs = [];
+  const triggers = [];
   const ss = {
     getSheetByName: n => sheets.find(s => s.name === n) || null,
     insertSheet: n => { const s = new Sheet(n); sheets.push(s); return s; },
@@ -189,7 +205,29 @@ export function loadGas(file) {
   };
   const ctx = {
     console: { log: m => logs.push(String(m)), error: m => logs.push('ERR ' + m) },
-    SpreadsheetApp: { getActive: () => ss, getUi: () => { throw new Error('UIなし'); }, ProtectionType: { SHEET: 'SHEET' }, BandingTheme: { LIGHT_GREY: 'LIGHT_GREY' }, BorderStyle: { SOLID: 'SOLID' } },
+    SpreadsheetApp: { getActive: () => ss, getUi: () => { throw new Error('UIなし'); }, ProtectionType: { SHEET: 'SHEET' }, BandingTheme: { LIGHT_GREY: 'LIGHT_GREY' }, BorderStyle: { SOLID: 'SOLID' },
+      newDataValidation: () => {
+        const b = { list: null, allowInvalid: false, requireValueInList(list, dropdown) { this.list = list; this.dropdown = dropdown; return this; },
+          setAllowInvalid(v) { this.allowInvalid = v; return this; }, build() { return { list: this.list, dropdown: this.dropdown, allowInvalid: this.allowInvalid }; } };
+        return b;
+      },
+      newConditionalFormatRule: () => {
+        const b = { whenTextEqualTo(t) { this.text = t; return this; }, setBackground(c) { this.bg = c; return this; },
+          setRanges(r) { this.ranges = r; return this; }, build() { return { text: this.text, bg: this.bg, ranges: this.ranges }; } };
+        return b;
+      } },
+    ScriptApp: {
+      getProjectTriggers: () => triggers.slice(),
+      newTrigger: fn => {
+        const t = { fn, kind: null, getHandlerFunction: () => fn };
+        const b = {
+          forSpreadsheet() { t.kind = 'sheet'; return b; }, onEdit() { t.event = 'edit'; return b; },
+          timeBased() { t.kind = 'time'; return b; }, onMonthDay(d) { t.day = d; return b; }, atHour(h) { t.hour = h; return b; }, inTimezone(z) { t.tz = z; return b; },
+          create() { triggers.push(t); return t; }
+        };
+        return b;
+      }
+    },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'hayashi@example.com' }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props.get(k) ?? null, setProperty: (k, v) => props.set(k, v) }) },
     CacheService: { getScriptCache: () => ({ get: k => cache.get(k) ?? null, put: (k, v) => cache.set(k, v), remove: k => cache.delete(k) }) },
@@ -219,7 +257,7 @@ export function loadGas(file) {
   const post = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
   // GASの「今」を決める（テストを日付に左右されないように）
   const setNow = iso => { ctx.now_ = () => new Date(iso); };
-  return { gas: ctx, ss, sheets, props, cache, logs, post, setNow };
+  return { gas: ctx, ss, sheets, props, cache, logs, post, setNow, triggers };
 }
 
 /** 別のスプレッドシート（管理シートなど）のまね。tabs = { タブ名: 2次元の値 } */

@@ -192,7 +192,7 @@ export function renderToday(root, app) {
         h('div', { class: 'inline-add' }, inp, h('button', { class: 'btn btn-primary', onclick: () => saveOpenCash(inp.value) }, '保存')),
         st.editOpen ? h('button', { class: 'btn btn-sm', onclick: () => { st.editOpen = false; paintAll(); } }, 'やめる') : null);
     }
-    const memberNames = [...new Set([...st.staff.map(x => x.name), ...splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan)])];
+    const memberNames = [...new Set([...(S().managerName ? [S().managerName] : []), ...st.staff.map(x => x.name), ...splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan)])];
     if (st.members == null) st.members = new Set(splitNames(st.dayRow?.shiftActual || st.dayRow?.shiftPlan));
     if (st.last == null) st.last = st.dayRow?.lastActual || st.dayRow?.lastPlan || '';
     const chosen = memberNames.filter(n => st.members.has(n));

@@ -94,7 +94,8 @@ export function renderPlan(root, app) {
 
   // シフト（予定）とラスト（予定）。閉店のときに、実績として直せる
   function shiftBox(d, row, editable) {
-    const names = st.staff.map(s => s.name);
+    const boss = app.settings.managerName;
+    const names = [...new Set([...(boss ? [boss] : []), ...st.staff.map(s => s.name), ...splitNames(row?.shiftPlan)])];
     if (!names.length) return h('div', { class: 'small muted2' }, 'シフトは、設定でスタッフを登録すると入れられます。');
     const members = new Set(splitNames(row?.shiftPlan));
     let last = row?.lastPlan || '';

@@ -122,6 +122,8 @@ function renderForm(root, app) {
       ),
 
     card('スタッフと時給',
+      field('店長の名前', 'シフトの選び方（予定・閉店・スプシの月のタブ）に出ます。勤怠の対象ではありません。',
+        h('input', { class: 'input', type: 'text', value: draft.managerName || '', oninput: e => { draft.managerName = e.target.value.trim(); dirty(); } })),
       num('時給の初期値', () => draft.defaultWage, x => { draft.defaultWage = x; }, '円', '新しく足すスタッフの時給です。人ごとに変えられます。'),
       staffEditor(app)),
 

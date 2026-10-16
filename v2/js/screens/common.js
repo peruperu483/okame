@@ -29,6 +29,7 @@ export function monthNav(month, onChange, { max } = {}) {
 
 /**
  * 月の売上の減算カウンター：あと ＝ 目標 − 確定した売上 − まだ来ていない日のイベントの見込み（計算はGAS）
+ * 大きく「目標まで あと（見込み込み）」、その下に小さく「確定だけだと あと」。バーは2色（濃い＝確定、薄い＝見込み。合わせて見込み込みの達成率。100%で止める）。
  * 内訳として「目標・確定・見込み・あと」を並べる。つながっていないときは前回の表示を残す
  * @returns {{el: HTMLElement, refresh: (month?: string) => Promise<void>, schedule: () => void, destroy: () => void}}
  */
@@ -42,18 +43,23 @@ export function mountCountdown(app, month) {
       return put(box, h('div', { class: 'lab' }, `${monthLabel(r.month)}の売上目標`),
         h('div', { class: 'small muted2' }, '目標がまだ入っていません。店長が、予定の画面の月の上か、設定で入れると、「あと いくら」が出ます。'));
     }
-    const left = r.remaining;
+    const left = r.remaining; // 見込みを入れた残り
+    const firmLeft = r.target - r.confirmed; // 確定だけの残り
     const done = left <= 0;
     const cell = (k, v, cls = '') => h('div', { class: 'cd-cell ' + cls }, h('div', { class: 'cd-k' }, k), h('div', { class: 'cd-v num' }, yen(v)));
     const w = v => Math.max(0, Math.min(100, Math.round(v / r.target * 100)));
+    const firmW = w(r.confirmed), planW = Math.min(w(r.expected), 100 - firmW); // 2つ合わせて100%で止める
+    const pct = Math.round((r.confirmed + r.expected) / r.target * 100);
     put(box,
-      h('div', { class: 'cd-top' },
-        h('div', { class: 'lab' }, `${monthLabel(r.month)}の売上目標まで`),
-        h('div', { class: 'cd-big num' + (done ? ' ok' : '') }, done ? '達成' + (left < 0 ? `（＋${yen(-left)}）` : '') : `あと ${yen(left)}`)),
+      h('div', { class: 'lab' }, `${monthLabel(r.month)}の売上目標`),
+      h('div', { class: 'cd-big num' + (done ? ' ok' : '') },
+        done ? `目標まで あと ${yen(0)}（${firmLeft <= 0 ? '達成' : '見込みで達成'}）` : `目標まで あと ${yen(left)}`),
+      h('div', { class: 'cd-sub num' }, firmLeft <= 0 ? `確定だけで達成（＋${yen(-firmLeft)}）` : `確定だけだと あと ${yen(firmLeft)}`),
+      h('div', { class: 'cd-cap num' }, `月の売上 ${yen(r.target)} の ${pct}%（見込み込み）`),
       h('div', { class: 'cd-bar', 'aria-hidden': 'true' },
-        h('div', { class: 'cd-fill', style: { width: w(r.confirmed) + '%' } }),
-        h('div', { class: 'cd-plan', style: { width: Math.min(w(r.expected), 100 - w(r.confirmed)) + '%' } })),
-      h('div', { class: 'cd-grid' }, cell('目標', r.target), cell('確定', r.confirmed), cell('見込み（イベント）', r.expected, 'plan'), cell('あと', Math.max(0, left), 'rest')));
+        h('div', { class: 'cd-fill', style: { width: firmW + '%' } }),
+        h('div', { class: 'cd-plan', style: { width: planW + '%' } })),
+      h('div', { class: 'cd-grid' }, cell('目標', r.target), cell('確定', r.confirmed, 'firm'), cell('見込み（イベント）', r.expected, 'plan'), cell('あと', Math.max(0, left), 'rest')));
   }
   async function refresh(m = cur) {
     cur = m;

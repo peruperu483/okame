@@ -507,14 +507,19 @@ button { cursor: pointer; }
 .small.warn { color: var(--warn); font-weight: 600; }
 
 /* 月の売上目標の減算カウンター・今日の出勤 */
-.countdown { gap: 12px; }
+.countdown { gap: 8px; }
 .countdown[hidden] { display: none; }
 .cd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.cd-big { font-size: 36px; font-weight: 700; line-height: 1.1; }
+.cd-big { font-size: 34px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
 .cd-big.ok { color: var(--accent); }
-.cd-bar { display: flex; height: 12px; border-radius: 6px; background: #EDEDEA; overflow: hidden; }
+.cd-sub { font-size: 14px; color: var(--text2); }
+.cd-cap { font-size: 13px; margin-top: 4px; }
+.cd-bar { display: flex; height: 14px; border-radius: 7px; background: #EDEDEA; overflow: hidden; }
 .cd-fill { background: var(--accent); }
-.cd-plan { background: repeating-linear-gradient(45deg, #9CBBAA, #9CBBAA 4px, #C9DCD0 4px, #C9DCD0 8px); }
+.cd-plan { background: #9CBBAA; }
+.cd-cell.firm .cd-k::before, .cd-cell.plan .cd-k::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.cd-cell.firm .cd-k::before { background: var(--accent); }
+.cd-cell.plan .cd-k::before { background: #9CBBAA; }
 .cd-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .cd-cell { padding: 8px 10px; border-radius: 10px; background: var(--bg2); min-width: 0; }
 .cd-cell.rest { background: var(--accent); color: #fff; }

@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.14.0';
+var APP_VERSION = '0.15.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -1914,7 +1914,7 @@ function openLegacySource_(ui, title) {
  * 管理シート（9月・10月）を取り込み直す（ロックの中で呼ぶ）：金額（過去の日別・過去の月次・9月と10月のタブ）と、予定（シフト・イベント）をまとめて。
  * どちらも、何度実行しても二重にならない（金額はその月をまるごと置き換え、予定はIDで上書き）。管理シートに10月の続きが打たれたら、これを実行する
  */
-function reimportLegacy_(source, today) {
+function reimportLegacy_(source, today) { // 予定は、9月・10月に加えて、管理シートに11月以降のタブがあれば、その月も（空いている日だけ）
   return { today: today, money: importLegacy_(source, today), plans: importLegacyPlans_(source) };
 }
 
@@ -1923,20 +1923,28 @@ function reimportMessage_(r) {
   var yen = function (v) { return '¥' + String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
   var plan = {};
   r.plans.tabs.forEach(function (t) { plan[t.tab] = t; });
-  var lines = ['管理シートから取り込み直しました（金額は ' + r.today + ' まで。予定は月末まで）', ''];
+  var lines = ['管理シートから取り込み直しました（金額は9月・10月の ' + r.today + ' まで。予定は月末まで）', ''];
+  var planLine = function (p) {
+    return '　予定：取り込んだ日 ' + (p.days || 0) + '日（うち店休日 ' + (p.closedDays || 0) + '日）・シフトの人数 のべ' + (p.people || 0) + '人・イベント ' + (p.events || 0) + '件'
+      + '・上書きせずに飛ばした日 ' + (p.skipped || 0) + '日' + (p.legacy ? '（9月・10月は管理シートの内容で上書き）' : '');
+  };
   r.money.forEach(function (x) {
     if (x.error) { lines.push(x.tab + '：' + x.error); return; }
-    var p = plan[x.tab] || {};
     lines.push('■ ' + x.tab);
     lines.push('　金額：' + x.days + '日分（' + x.until + '）・売上の合計 ' + yen(x.sales));
-    lines.push('　予定：シフトのある日 ' + (p.days || 0) + '日（うち店休日 ' + (p.closedDays || 0) + '日）・シフトの人数 のべ' + (p.people || 0) + '人・イベント ' + (p.events || 0) + '件');
+    if (plan[x.tab]) lines.push(planLine(plan[x.tab]));
     if (x.unknown.length) lines.push('　読めなかった列：' + x.unknown.join('、'));
+  });
+  r.plans.tabs.forEach(function (p) { // 11月以降（予定だけ。金額は入れない）
+    if (p.legacy !== false || p.error) return;
+    lines.push('■ ' + p.tab + '（予定だけ。もう入っている日は上書きしない）');
+    lines.push(planLine(p));
   });
   var oct = r.money.filter(function (x) { return x.tab === '10月' && !x.error; })[0];
   if (oct) lines.push('', '10月の売上の合計：' + yen(oct.sales) + '（' + oct.until + '）');
   if (r.plans.removed) lines.push('', '管理シートから消えていたイベント：' + r.plans.removed + '件を削除にしました');
   lines.push('', '月のタブ（9月・10月）を' + (r.money[0] && r.money[0].tabs === 'copy' ? '管理シートの9月をコピーして' : '自前の形で（見本のコピーができなかったため）') + '作り直しました。',
-    '何度実行しても二重にはなりません（金額はその月をまるごと置き換え、予定は同じ日・同じ名前に上書きします）。');
+    '何度実行しても二重にはなりません（金額はその月をまるごと置き換え、予定は同じ日・同じ名前に上書きします。11月以降は、アプリやスプシで入れた・直した日は上書きしません）。');
   return lines.join('\n');
 }
 
@@ -1957,40 +1965,86 @@ function reimportLegacy() {
 var LEGACY_PLAN_MARK = '管理シートの予定から';
 var LEGACY_PLAN_SHIFT_COLS = 4; // シフトの欄のうち取り込む列（C〜F の4列すべて。2026-10-16 林の指示）
 
-/** 取り込む（ロックの中で呼ぶ）。件数を返す */
+var LEGACY_PLAN_DEVICE = 'kanri-import'; // 取り込みで書いた行の「端末」。アプリやスプシで直すと変わるので、直された行は上書きしない
+
+/**
+ * 予定を取り込む管理シートのタブ：9月・10月（管理シートの月。いつも管理シートの内容で上書き）と、
+ * 運用開始日の月以降で、今月の2か月前〜2か月先の月（空いている日だけ入れる）。タブの名前は「11月」「2027年1月」「1月」の形
+ */
+function legacyPlanTabs_(source, settings) {
+  var out = [];
+  Object.keys(LEGACY_TABS).forEach(function (tab) { out.push({ tab: tab, month: LEGACY_TABS[tab], legacy: true, sheet: source.getSheetByName(tab) }); });
+  var goLive = String(settings.goLiveDate || '').slice(0, 7);
+  var now = Utilities.formatDate(now_(), TZ, 'yyyy-MM');
+  var from = prevMonth_(prevMonth_(now)), to = nextMonth_(nextMonth_(now));
+  if (goLive && goLive > from) from = goLive;
+  var legacy = Object.keys(LEGACY_TABS).map(function (k) { return LEGACY_TABS[k]; });
+  for (var m = from; m <= to; m = nextMonth_(m)) {
+    if (legacy.indexOf(m) >= 0) continue;
+    var names = [monthTabLabel_(m), Number(m.slice(5, 7)) + '月'];
+    var sheet = null, name = names[0];
+    names.forEach(function (nm) { if (!sheet && source.getSheetByName(nm)) { sheet = source.getSheetByName(nm); name = nm; } });
+    if (sheet) out.push({ tab: name, month: m, legacy: false, sheet: sheet });
+  }
+  return out;
+}
+
+/**
+ * 取り込む（ロックの中で呼ぶ）。件数を返す。
+ * 9月・10月：管理シートの内容で上書き。11月以降：アプリの予定（またはアプリのタブ）にもう入っている日は飛ばし、空いている日だけ入れる
+ * （前にこの取り込みで入れて、そのあと誰も直していない日は、管理シートの内容に合わせ直す）。入れたら、その月のアプリのタブのシフト・イベントの欄も書き換える
+ */
 function importLegacyPlans_(source) {
   var settings = getSettings_();
   var now = nowIso_();
-  var ctx = { mgr: true, settings: settings, deviceId: 'kanri-import', by: '管理シートの取り込み', force: true };
+  var ctx = { mgr: true, settings: settings, deviceId: LEGACY_PLAN_DEVICE, by: '管理シートの取り込み', force: true };
+  var tabs = legacyPlanTabs_(source, settings);
+  if (tabs.some(function (t) { return !t.legacy; })) catchUpSheetEdits_(settings, true); // アプリのタブで打って、まだアプリに入っていない分を先に入れる
   var dayRows = {};
   readTable_(TABLES.days).rows.forEach(function (r) { dayRows[String(r.id)] = r; });
   var eventRows = readTable_(TABLES.events).rows;
   var eventById = {};
   eventRows.forEach(function (e) { eventById[String(e.id)] = e; });
+  var eventVisitDates = {};
+  readTable_(TABLES.visits).rows.forEach(function (v) { if (v.kind === 'イベント' && v.status !== '削除' && v.trial !== true) eventVisitDates[v.bizDate] = true; });
   var type = (settings.eventTypes || [])[0] || '団体';
-  var dayOps = [], eventOps = [], keep = {}, months = [];
-  var res = { tabs: [], days: 0, people: 0, closedDays: 0, events: 0, removed: 0 };
-  Object.keys(LEGACY_TABS).forEach(function (tab) {
-    var month = LEGACY_TABS[tab];
-    var sh = source.getSheetByName(tab);
-    if (!sh) { res.tabs.push({ tab: tab, error: 'タブ「' + tab + '」が見つかりません' }); return; }
-    months.push(month);
-    var parsed = parseLegacyTab_(sh.getDataRange().getValues(), month, '9999-12-31', null); // 先の日（予定）も入れる
-    var t = { tab: tab, days: 0, people: 0, closedDays: 0, events: 0 };
+  var dayOps = [], eventOps = [], keep = {}, months = [], skippedDates = {}, appMonths = [];
+  var res = { tabs: [], days: 0, people: 0, closedDays: 0, events: 0, skipped: 0, removed: 0 };
+  // その日に、取り込み以外で入った予定があるか（シフト・店休日・イベント・入店したイベント）
+  var filled = function (date) {
+    var r = dayRows[date];
+    if (r && r.deviceId !== LEGACY_PLAN_DEVICE && (r.shiftPlan || r.shiftActual || r.closed === true)) return true;
+    if (eventVisitDates[date]) return true;
+    return eventRows.some(function (e) { return e.date === date && e.status !== '削除' && e.deviceId !== LEGACY_PLAN_DEVICE; });
+  };
+  tabs.forEach(function (tb) {
+    if (!tb.sheet) { res.tabs.push({ tab: tb.tab, error: 'タブ「' + tb.tab + '」が見つかりません' }); return; }
+    months.push(tb.month);
+    if (!tb.legacy) appMonths.push(tb.month);
+    var parsed = parseLegacyTab_(tb.sheet.getDataRange().getValues(), tb.month, '9999-12-31', null); // 先の日（予定）も入れる
+    var t = { tab: tb.tab, month: tb.month, legacy: tb.legacy, days: 0, people: 0, closedDays: 0, events: 0, skipped: 0 };
     parsed.days.forEach(function (d) {
       var cells = d.shiftCells.slice(0, LEGACY_PLAN_SHIFT_COLS).filter(String);
       var closed = cells.indexOf('店休日') >= 0;
       var names = [];
       cells.forEach(function (x) { if (x !== '店休日' && names.indexOf(x) < 0) names.push(x); });
+      var titles = [];
+      String(d.event || '').split(/[、,，\n]+/).forEach(function (x) { x = x.trim(); if (x && titles.indexOf(x) < 0) titles.push(x); });
+      var has = names.length || closed || titles.length;
+      if (!tb.legacy && filled(d.date)) { // 11月以降：もう入っている日は上書きしない
+        skippedDates[d.date] = true;
+        if (has) t.skipped += 1;
+        return;
+      }
       var cur = dayRows[d.date];
-      if (names.length || closed || (cur && cur.memo === LEGACY_PLAN_MARK)) {
+      var ours = cur && (tb.legacy ? cur.memo === LEGACY_PLAN_MARK : cur.deviceId === LEGACY_PLAN_DEVICE);
+      if (names.length || closed || ours) {
         dayOps.push({ opId: 'lgp-' + d.date + '-' + now, id: d.date, data: { bizDate: d.date, shiftPlan: names.join('、'), closed: closed, memo: LEGACY_PLAN_MARK, updatedAt: now } });
       }
       if (names.length || closed) t.days += 1;
+      else if (titles.length) t.days += 1;
       t.people += names.length;
       if (closed) t.closedDays += 1;
-      var titles = [];
-      String(d.event || '').split(/[、,，\n]+/).forEach(function (x) { x = x.trim(); if (x && titles.indexOf(x) < 0) titles.push(x); });
       titles.forEach(function (title) {
         var id = 'lg-' + d.date + '-' + title;
         keep[id] = true;
@@ -2001,18 +2055,20 @@ function importLegacyPlans_(source) {
       });
     });
     res.tabs.push(t);
-    res.days += t.days; res.people += t.people; res.closedDays += t.closedDays; res.events += t.events;
+    res.days += t.days; res.people += t.people; res.closedDays += t.closedDays; res.events += t.events; res.skipped += t.skipped;
   });
-  eventRows.forEach(function (e) { // 前に取り込んで、管理シートから消えたイベントは削除にする
+  eventRows.forEach(function (e) { // 前に取り込んで、管理シートから消えたイベントは削除にする（11月以降は、飛ばした日と、直された予定は触らない）
     var id = String(e.id);
     if (id.indexOf('lg-') !== 0 || keep[id] || e.status === '削除' || months.indexOf(monthOf_(e.date)) < 0) return;
+    if (appMonths.indexOf(monthOf_(e.date)) >= 0 && (skippedDates[e.date] || e.deviceId !== LEGACY_PLAN_DEVICE)) return;
     eventOps.push({ opId: 'lge-del-' + id + '-' + now, id: id, data: { status: '削除', updatedAt: now } });
     res.removed += 1;
   });
   if (dayOps.length) upsert_('days', dayOps, ctx);
   if (eventOps.length) upsert_('events', eventOps, ctx);
+  appMonths.forEach(function (m) { if (appTab_(SpreadsheetApp.getActive(), m)) refreshPlanColumns_(m); }); // アプリのタブのシフト・イベントの欄にも出す
   appendLog_({ type: '管理シートの予定を取り込む', table: 'days', targetId: months.join(','),
-    after: { days: res.days, people: res.people, closedDays: res.closedDays, events: res.events, removed: res.removed }, by: '管理シートの取り込み' }, ctx);
+    after: { days: res.days, people: res.people, closedDays: res.closedDays, events: res.events, skipped: res.skipped, removed: res.removed }, by: '管理シートの取り込み' }, ctx);
   return res;
 }
 

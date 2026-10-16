@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.15.0';
+var APP_VERSION = '0.16.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -198,7 +198,7 @@ function onOpen() {
     .addItem('共有トークンを表示', 'showToken')
     .addItem('暗証番号を作り直す', 'resetPin')
     .addSeparator()
-    .addItem('管理シートから取り込み直す（9月・10月）', 'reimportLegacy')
+    .addItem('管理シートから取り込み直す', 'reimportLegacy')
     .addItem('月次を作り直す', 'buildMonthlySheet')
     .addItem('来月のタブを作る', 'createNextMonthTab')
     .addItem('月のタブを作り直す（11月以降）', 'buildAppMonthTabs')
@@ -1197,9 +1197,10 @@ function monthTabNames_(ss, settings) {
   return names;
 }
 
-// ===== 手打ちのタブ（試運転のあいだ、店長が今までどおり管理シートの形で打つ）=====
-// 見た目と列は管理シートの9月と同じ（月のひな形をコピー）。日付と曜日だけ入れ、ほかは空。保護しない。
-// アプリ（GAS）は、作ったあと一切書き込まない。一番下に「アプリとの差」の行（月の合計どうしの差。式なので自動で変わる。色なし）
+// ===== 手打ちのタブ（試運転のあいだの、管理シートの写し）=====
+// 見た目と列は管理シートの9月と同じ（月のひな形をコピー）。作ったときは日付と曜日だけ。中身は「管理シートから取り込み直す」と毎朝6時ごろに、
+// 管理シートのその月のタブから写す（copyHandTab_）。打てなくはしないが、打とうとすると注意が出る。
+// 一番下に「アプリとの差」の行（月の合計どうしの差。式なので自動で変わる。色なし）
 var HAND_DIFF_ROW = MONTH_ROWS + 3; // 34行目（33行目は合計）
 
 /** 手打ちのタブを作る。作ったら名前、もうあれば null */
@@ -1216,6 +1217,7 @@ function createHandTab_(month) {
   sh.setName(name);
   try { sh.showSheet(); } catch (e) { /* もとから見えている */ }
   try { sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (pr) { pr.remove(); }); } catch (e) { /* 保護がなければ何もしない */ }
+  markHandTab_(sh);
   var n = daysInMonth_(month), dates = [];
   for (var i = 0; i < MONTH_ROWS; i++) dates.push(i < n ? [i + 1, dowOf_(month + '-' + pad2_(i + 1))] : ['', '']);
   sh.getRange(1, 1).setValue(base + HAND_TAB_SUFFIX);
@@ -1242,7 +1244,7 @@ function autoHandTab_() {
   if (props.getProperty(key) || Object.keys(LEGACY_TABS).some(function (k) { return LEGACY_TABS[k] === month; })) return '';
   var name = createHandTab_(month);
   props.setProperty(key, '1');
-  return name ? '「' + name + '」のタブを作りました（店長が管理シートと同じ形で打つタブ。保護なし）。' : '';
+  return name ? '「' + name + '」のタブを作りました（管理シートの11月の写し。「管理シートから取り込み直す」で写します）。' : '';
 }
 
 /** 「12月」「2027-01」「2027年1月」「12」などを、月（YYYY-MM）にする。年がなければ、今月以降で一番近い月 */
@@ -1260,7 +1262,7 @@ function parseMonthInput_(text, nowMonth) {
 /** スプシのメニュー：手打ちのタブを作る（月を聞く） */
 function createHandTab() {
   var ui = SpreadsheetApp.getUi();
-  var r = ui.prompt('手打ちのタブを作る', 'どの月ですか？（例：12月、2027-01）\n管理シートと同じ形の空のタブを、その月のアプリのタブの隣に作ります。', ui.ButtonSet.OK_CANCEL);
+  var r = ui.prompt('手打ちのタブを作る', 'どの月ですか？（例：12月、2027-01）\n管理シートのその月のタブの写しを、その月のアプリのタブの隣に作ります。', ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
   var settings = getSettings_();
   var month = parseMonthInput_(r.getResponseText(), Utilities.formatDate(now_(), TZ, 'yyyy-MM'));
@@ -1270,7 +1272,7 @@ function createHandTab() {
     ui.alert(month + ' は、管理シートから取り込む月（または運用開始日より前の月）なので作りません。'); return;
   }
   var name = withLock_(function () { return createHandTab_(month); });
-  ui.alert(name ? '「' + name + '」を作りました。保護はかけていないので、店長が全部手で打てます。アプリからは書き込みません。一番下の「アプリとの差」は、月の合計どうしの差です。'
+  ui.alert(name ? '「' + name + '」を作りました。中身は、次の「管理シートから取り込み直す」（または毎朝6時ごろ）で、管理シートのその月のタブから写します。一番下の「アプリとの差」は、月の合計どうしの差です。'
     : '「' + monthTabLabel_(month) + HAND_TAB_SUFFIX + '」は、もうあります。');
 }
 
@@ -1546,7 +1548,7 @@ function createNextMonthTabAuto() {
   try { createNextMonthTab_(); } catch (e) { console.error('来月のタブを作れませんでした：' + e.message); }
 }
 
-/** 自動の動き（トリガー）を作る：スプシの編集をアプリに入れる・毎月20日に来月のタブ。何度実行しても1つずつ */
+/** 自動の動き（トリガー）を作る：スプシの編集をアプリに入れる・毎月20日に来月のタブ・毎朝6時ごろに管理シートから取り込み直す。何度実行しても1つずつ */
 function ensureTriggers_() {
   try {
     var ss = SpreadsheetApp.getActive();
@@ -1555,6 +1557,7 @@ function ensureTriggers_() {
     var made = [];
     if (!have['handleSheetEdit']) { ScriptApp.newTrigger('handleSheetEdit').forSpreadsheet(ss).onEdit().create(); made.push('スプシで打った予定をアプリに入れる'); }
     if (!have['createNextMonthTabAuto']) { ScriptApp.newTrigger('createNextMonthTabAuto').timeBased().onMonthDay(20).atHour(9).inTimezone(TZ).create(); made.push('毎月20日に来月のタブを作る'); }
+    if (!have['reimportLegacyAuto']) { ScriptApp.newTrigger('reimportLegacyAuto').timeBased().everyDays(1).atHour(6).inTimezone(TZ).create(); made.push('毎朝6時ごろに管理シートから取り込み直す'); }
     return made.length ? '自動の動き（トリガー）を設定しました：' + made.join('・') : '自動の動き（トリガー）は設定済みです。';
   } catch (e) {
     return '自動の動き（トリガー）を設定できませんでした：' + e.message + '（もう一度「初期設定」を実行し、許可を求められたら許可してください）';
@@ -1745,7 +1748,9 @@ function checkSheetSync() {
   var has = false;
   try { has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'handleSheetEdit'; }); } catch (e) { lines.push('トリガーを読めませんでした：' + e.message); }
   lines.push(has ? '編集のトリガー：あります。' : '編集のトリガー：ありませんでした。');
-  if (!has) lines.push(ensureTriggers_());
+  lines.push(ensureTriggers_());
+  var auto = PropertiesService.getScriptProperties().getProperty('AUTO_REIMPORT_LAST');
+  if (auto) { var au = JSON.parse(auto); lines.push('毎朝の取り込み直し（最後）：' + String(au.at).slice(0, 16).replace('T', ' ') + '　' + au.result); }
   var last = PropertiesService.getScriptProperties().getProperty('SHEET_EDIT_LAST');
   if (last) {
     var l = JSON.parse(last);
@@ -1914,8 +1919,10 @@ function openLegacySource_(ui, title) {
  * 管理シート（9月・10月）を取り込み直す（ロックの中で呼ぶ）：金額（過去の日別・過去の月次・9月と10月のタブ）と、予定（シフト・イベント）をまとめて。
  * どちらも、何度実行しても二重にならない（金額はその月をまるごと置き換え、予定はIDで上書き）。管理シートに10月の続きが打たれたら、これを実行する
  */
-function reimportLegacy_(source, today) { // 予定は、9月・10月に加えて、管理シートに11月以降のタブがあれば、その月も（空いている日だけ）
-  return { today: today, money: importLegacy_(source, today), plans: importLegacyPlans_(source) };
+function reimportLegacy_(source, today) { // 予定は、9月・10月に加えて、管理シートに11月以降のタブがあれば、その月も（空いている日だけ）。手打ちのタブは、管理シートの写しにする
+  var money = importLegacy_(source, today);
+  var plans = importLegacyPlans_(source);
+  return { today: today, money: money, plans: plans, hand: copyHandTabs_(source, getSettings_()) };
 }
 
 /** 取り込み直しの結果の表示 */
@@ -1923,7 +1930,7 @@ function reimportMessage_(r) {
   var yen = function (v) { return '¥' + String(Math.round(Number(v) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
   var plan = {};
   r.plans.tabs.forEach(function (t) { plan[t.tab] = t; });
-  var lines = ['管理シートから取り込み直しました（金額は9月・10月の ' + r.today + ' まで。予定は月末まで）', ''];
+  var lines = ['管理シートから取り込み直しました（9月・10月の金額は ' + r.today + ' まで。予定は月末まで。11月以降の金額は、手打ちのタブにだけ写します）', ''];
   var planLine = function (p) {
     return '　予定：取り込んだ日 ' + (p.days || 0) + '日（うち店休日 ' + (p.closedDays || 0) + '日）・シフトの人数 のべ' + (p.people || 0) + '人・イベント ' + (p.events || 0) + '件'
       + '・上書きせずに飛ばした日 ' + (p.skipped || 0) + '日' + (p.legacy ? '（9月・10月は管理シートの内容で上書き）' : '');
@@ -1939,6 +1946,15 @@ function reimportMessage_(r) {
     if (p.legacy !== false || p.error) return;
     lines.push('■ ' + p.tab + '（予定だけ。もう入っている日は上書きしない）');
     lines.push(planLine(p));
+    (r.hand || []).forEach(function (h) {
+      if (h.month !== p.month) return;
+      lines.push(h.error ? '　' + h.error : '　「' + h.tab + '」に写した日 ' + h.days + '日・売上の合計 ' + yen(h.sales));
+    });
+  });
+  (r.hand || []).forEach(function (h) { // 予定の取り込みの月に入っていない手打ちのタブ
+    if (r.plans.tabs.some(function (p) { return p.month === h.month && p.legacy === false; })) return;
+    lines.push('■ ' + h.tab);
+    lines.push(h.error ? '　' + h.error : '　写した日 ' + h.days + '日・売上の合計 ' + yen(h.sales));
   });
   var oct = r.money.filter(function (x) { return x.tab === '10月' && !x.error; })[0];
   if (oct) lines.push('', '10月の売上の合計：' + yen(oct.sales) + '（' + oct.until + '）');
@@ -1956,6 +1972,23 @@ function reimportLegacy() {
   var today = serverBizDate_(getSettings_());
   var r = withLock_(function () { return reimportLegacy_(source, today); });
   ui.alert(reimportMessage_(r));
+}
+
+/** 毎朝6時ごろに動く（トリガー）：ボタンと同じ取り込み直し。管理シートのURLは、前にボタンで入れたものを使う。結果はスクリプトプロパティに残す */
+function reimportLegacyAuto() {
+  var props = PropertiesService.getScriptProperties();
+  var note = function (result) { props.setProperty('AUTO_REIMPORT_LAST', JSON.stringify({ at: nowIso_(), result: result })); };
+  try {
+    var url = props.getProperty('LEGACY_URL');
+    if (!url) { note('管理シートのURLがまだありません（先に「管理シートから取り込み直す」を1回押してください）'); return; }
+    var source = SpreadsheetApp.openByUrl(url);
+    var today = serverBizDate_(getSettings_());
+    var r = withLock_(function () { return reimportLegacy_(source, today); });
+    note('取り込み直しました：' + (r.hand || []).map(function (h) { return h.error ? h.tab + ' ' + h.error : h.tab + ' ' + h.days + '日'; }).join('・'));
+  } catch (e) {
+    console.error('管理シートから自動で取り込み直せませんでした：' + e.message);
+    note('失敗：' + e.message);
+  }
 }
 
 // ===== 管理シート（9月・10月）のシフトとイベントを、アプリの予定に入れる =====
@@ -1981,10 +2014,83 @@ function legacyPlanTabs_(source, settings) {
   var legacy = Object.keys(LEGACY_TABS).map(function (k) { return LEGACY_TABS[k]; });
   for (var m = from; m <= to; m = nextMonth_(m)) {
     if (legacy.indexOf(m) >= 0) continue;
-    var names = [monthTabLabel_(m), Number(m.slice(5, 7)) + '月'];
-    var sheet = null, name = names[0];
-    names.forEach(function (nm) { if (!sheet && source.getSheetByName(nm)) { sheet = source.getSheetByName(nm); name = nm; } });
-    if (sheet) out.push({ tab: name, month: m, legacy: false, sheet: sheet });
+    var found = legacySourceTab_(source, m);
+    if (found) out.push({ tab: found.name, month: m, legacy: false, sheet: found.sheet });
+  }
+  return out;
+}
+
+/** 管理シートの、その月のタブ（「11月」「2027年1月」「1月」の形）。なければ null */
+function legacySourceTab_(source, month) {
+  var names = [monthTabLabel_(month), Number(month.slice(5, 7)) + '月'];
+  for (var i = 0; i < names.length; i++) { var sh = source.getSheetByName(names[i]); if (sh) return { name: names[i], sheet: sh }; }
+  return null;
+}
+
+// ===== 手打ちのタブ＝管理シートの写し（2026-10-16〜）=====
+// 試運転のあいだ、店長は11月以降の数字を管理シートに打つ。手打ちのタブ（「11月（手打ち）」）は、管理シートのその月のタブの写しにする。
+// 写すたびに、日の行（2〜32行目）のシフト・団体及びイベント・金額をまるごと上書きする（二重にならない）。合計の行と「アプリとの差」の行はそのまま。
+// 列の並びは手打ちのタブのまま（見出しの名前で読むので、管理シートの列の並びが違っても同じ列に入る）
+var HAND_TAB_NOTICE = 'このタブは管理シートの写しです。ここに打っても、次に写すとき（「管理シートから取り込み直す」・毎朝6時ごろ）に上書きされます。数字は管理シートに打ってください。';
+var HAND_NOTICE_COL = 19; // S1（保険の見出しの右）
+
+/** 手打ちのタブの上に、一言と、打とうとしたときの注意を付ける（何度付けてもよい） */
+function markHandTab_(sh) {
+  sh.getRange(1, HAND_NOTICE_COL).setValue(HAND_TAB_NOTICE).setFontWeight('bold').setFontColor('#c0392b').setWrap(false);
+  try { sh.getRange(1, 1).setNote(HAND_TAB_NOTICE); } catch (e) { /* メモが付けられなくても先へ */ }
+  try {
+    var p = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET)[0] || sh.protect();
+    p.setDescription(HAND_TAB_NOTICE);
+    p.setWarningOnly(true); // 打てなくはしない。打とうとすると注意が出る
+  } catch (e) { /* 注意を付けられなくても先へ */ }
+}
+
+/** 管理シートのタブ（2次元の値）を、手打ちのタブに写す。写した日数（何か入っている日）と売上の合計を返す */
+function copyHandTab_(sh, values, month, settings) {
+  var parsed = parseLegacyTab_(values, month, '9999-12-31', null);
+  var byDate = {};
+  parsed.days.forEach(function (d) { byDate[d.date] = d; });
+  var n = daysInMonth_(month), rows = [], days = 0, sales = 0;
+  for (var i = 0; i < MONTH_ROWS; i++) {
+    var row = blankRow_();
+    if (i < n) {
+      var date = month + '-' + pad2_(i + 1), d = byDate[date];
+      row[0] = i + 1; row[1] = dowOf_(date);
+      if (d) {
+        var sc = d.shiftCells || [];
+        row[2] = sc[0] || ''; row[3] = sc[1] || ''; row[4] = sc[2] || ''; row[5] = sc[3] || '';
+        row[6] = d.event || '';
+        var fx = d.fixed || {};
+        var money = [d.laborKana, d.laborOther, d.cash, d.group, d.point, d.food, d.other, d.cashless,
+          fx['家賃電気'] || 0, fx['ガス・カラオケ・Wi-Fi・電話'] || 0, fx['保険'] || 0];
+        var any = money.some(function (v) { return v !== 0; });
+        if (any) for (var k = 0; k < money.length; k++) row[7 + k] = money[k]; // 金額が1つもない日は、金額の列を空にする
+        if (any || row.slice(2, 7).some(String)) days += 1;
+        sales += d.cash + d.group + d.cashless + (settings.pointCountsAsSales === false ? 0 : d.point);
+      }
+    }
+    rows.push(row);
+  }
+  sh.getRange(2, 3, MONTH_ROWS, 5).setNumberFormat('@'); // 名前に「=」で始まる文字があっても、数式にしない
+  sh.getRange(2, 1, MONTH_ROWS, 18).setValues(rows);
+  markHandTab_(sh);
+  return { days: days, sales: sales };
+}
+
+/** 手打ちのタブがある月（運用開始日の月〜2か月先）を、管理シートから写す（ロックの中で呼ぶ） */
+function copyHandTabs_(source, settings) {
+  var ss = SpreadsheetApp.getActive();
+  var goLive = String(settings.goLiveDate || '').slice(0, 7);
+  var to = nextMonth_(nextMonth_(Utilities.formatDate(now_(), TZ, 'yyyy-MM')));
+  var out = [];
+  if (!goLive) return out;
+  for (var m = goLive; m <= to; m = nextMonth_(m)) {
+    var hand = ss.getSheetByName(monthTabLabel_(m) + HAND_TAB_SUFFIX);
+    if (!hand) continue;
+    var src = legacySourceTab_(source, m);
+    if (!src) { out.push({ tab: hand.getName(), month: m, error: '管理シートに「' + monthTabLabel_(m) + '」のタブがありません（写していません）' }); continue; }
+    var r = copyHandTab_(hand, src.sheet.getDataRange().getValues(), m, settings);
+    out.push({ tab: hand.getName(), month: m, from: src.name, days: r.days, sales: r.sales });
   }
   return out;
 }

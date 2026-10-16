@@ -32,7 +32,8 @@ test('初期設定で「11月（手打ち）」が1回だけでき、アプリ�
   const env = boot('2026-10-20T10:00:00+09:00', { handTab: true });
   const hand = env.ss.getSheetByName('11月（手打ち）');
   assert.ok(hand, '手打ちのタブ');
-  assert.equal(hand.protection, undefined, '保護しない');
+  assert.equal(hand.protection.warningOnly, true, '打てなくはしない（打とうとすると注意が出る）');
+  assert.match(hand.getRange(1, 19).getValue(), /管理シートの写し.*上書きされます/); // タブの上の一言
   assert.equal(hand.hidden, false);
   assert.ok(env.logs.join('\n').includes('「11月（手打ち）」のタブを作りました'));
   // 管理シートと同じ列（月のひな形のコピー）。日付と曜日だけ入る

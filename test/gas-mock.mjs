@@ -98,6 +98,7 @@ class Range {
     return this;
   }
   setValue(v) { this.sheet._set(this.r, this.c, v); return this; }
+  setNote(n) { (this.sheet.notes = this.sheet.notes || new Map()).set(this.r + ':' + this.c, n); return this; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sheet.cells.delete(this.sheet._key(this.r + i, this.c + j)); return this; }
 }
 
@@ -216,6 +217,7 @@ class Sheet {
       removeEditors: us => { us.forEach(u => editors.delete(u.getEmail())); },
       getEditors: () => [...editors].map(e => ({ getEmail: () => e })),
       setUnprotectedRanges(r) { this.unprotected = r; return this; },
+      setWarningOnly(v) { this.warningOnly = v; return this; },
       remove: () => { this.protection = null; },
       getUnprotectedRanges() { return this.unprotected || []; },
       canDomainEdit: () => domain,
@@ -270,7 +272,7 @@ export function loadGas(file, opts = {}) {
         const t = { fn, kind: null, getHandlerFunction: () => fn };
         const b = {
           forSpreadsheet() { t.kind = 'sheet'; return b; }, onEdit() { t.event = 'edit'; return b; },
-          timeBased() { t.kind = 'time'; return b; }, onMonthDay(d) { t.day = d; return b; }, atHour(h) { t.hour = h; return b; }, inTimezone(z) { t.tz = z; return b; },
+          timeBased() { t.kind = 'time'; return b; }, onMonthDay(d) { t.day = d; return b; }, everyDays(n) { t.everyDays = n; return b; }, atHour(h) { t.hour = h; return b; }, inTimezone(z) { t.tz = z; return b; },
           create() { triggers.push(t); return t; }
         };
         return b;

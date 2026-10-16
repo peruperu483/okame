@@ -31,13 +31,15 @@ function typeCells(env, name, row, col, rows2d) {
 test('初期設定で自動の動き（トリガー）ができ、何度実行しても1つずつ', () => {
   const env = boot();
   const fns = () => env.triggers.map(t => t.fn).sort();
-  assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit']);
+  assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit', 'reimportLegacyAuto']);
+  const daily = env.triggers.find(t => t.fn === 'reimportLegacyAuto');
+  assert.deepEqual([daily.kind, daily.everyDays, daily.hour, daily.tz], ['time', 1, 6, 'Asia/Tokyo']); // 毎朝6時ごろ
   const time = env.triggers.find(t => t.fn === 'createNextMonthTabAuto');
   assert.deepEqual([time.kind, time.day, time.hour, time.tz], ['time', 20, 9, 'Asia/Tokyo']);
   assert.equal(env.triggers.find(t => t.fn === 'handleSheetEdit').event, 'edit');
   env.gas.setup();
   env.setSetting('managerFee', 180000); env.setSetting('defaultWage', 1500); // テスト用に作った金額（コードの初期値は0）
-  assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit']);
+  assert.deepEqual(fns(), ['createNextMonthTabAuto', 'handleSheetEdit', 'reimportLegacyAuto']);
 });
 
 test('来月のタブ：日付・曜日・シフトの予定・店休日・予定のイベントの名前が入り、金額は空。ラストの列はない', () => {

@@ -48,8 +48,8 @@ test('管理シートの9月・10月のシフト（C〜Fの4列すべて）と�
   const env = boot();
   const r = plain(env.gas.importLegacyPlans_(source()));
   assert.deepEqual(r.tabs, [
-    { tab: '9月', month: '2026-09', legacy: true, days: 5, people: 5, closedDays: 2, events: 3, skipped: 0 },
-    { tab: '10月', month: '2026-10', legacy: true, days: 3, people: 7, closedDays: 0, events: 3, skipped: 0 }
+    { tab: '9月', month: '2026-09', legacy: true, days: 5, people: 5, closedDays: 2, events: 3, skipped: 0, expected: 0 },
+    { tab: '10月', month: '2026-10', legacy: true, days: 3, people: 7, closedDays: 0, events: 3, skipped: 0, expected: 0 }
   ]);
   assert.deepEqual([r.days, r.people, r.closedDays, r.events, r.removed], [8, 12, 2, 6, 0]);
   const d = days(env);

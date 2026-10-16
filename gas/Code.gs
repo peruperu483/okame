@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.16.0';
+var APP_VERSION = '0.17.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -768,9 +768,10 @@ function parseLegacyTab_(values, month, today, backgrounds) {
     if (i < 2 || !h) return;
     if (LEGACY_COLS[h]) col[LEGACY_COLS[h]] = i;
   });
+  if (col.event == null && /^列\d*$/.test(header[6] || '')) col.event = 6; // 管理シートの11月は、団体及びイベントの列の見出しが「列 7」
   var eventCol = col.event != null ? col.event : 6;
   header.forEach(function (h, i) {
-    if (i >= 2 && i < eventCol) return; // シフトの欄（列1〜列4・1・2・3・3 2 など）
+    if (i >= 2 && i <= eventCol) return; // シフトの欄（列1〜列4・1・2・3・3 2 など）と、団体及びイベントの列
     if (i >= 2 && h && !LEGACY_COLS[h]) unknown.push(h);
   });
   var n = function (v) { var x = Number(v); return isNaN(x) ? 0 : x; };
@@ -1921,8 +1922,8 @@ function openLegacySource_(ui, title) {
  */
 function reimportLegacy_(source, today) { // 予定は、9月・10月に加えて、管理シートに11月以降のタブがあれば、その月も（空いている日だけ）。手打ちのタブは、管理シートの写しにする
   var money = importLegacy_(source, today);
-  var plans = importLegacyPlans_(source);
-  return { today: today, money: money, plans: plans, hand: copyHandTabs_(source, getSettings_()) };
+  var plans = importLegacyPlans_(source, today);
+  return { today: today, money: money, plans: plans, hand: copyHandTabs_(source, getSettings_(), today) };
 }
 
 /** 取り込み直しの結果の表示 */
@@ -1933,7 +1934,8 @@ function reimportMessage_(r) {
   var lines = ['管理シートから取り込み直しました（9月・10月の金額は ' + r.today + ' まで。予定は月末まで。11月以降の金額は、手打ちのタブにだけ写します）', ''];
   var planLine = function (p) {
     return '　予定：取り込んだ日 ' + (p.days || 0) + '日（うち店休日 ' + (p.closedDays || 0) + '日）・シフトの人数 のべ' + (p.people || 0) + '人・イベント ' + (p.events || 0) + '件'
-      + '・上書きせずに飛ばした日 ' + (p.skipped || 0) + '日' + (p.legacy ? '（9月・10月は管理シートの内容で上書き）' : '');
+      + '・上書きせずに飛ばした日 ' + (p.skipped || 0) + '日' + (p.legacy ? '（9月・10月は管理シートの内容で上書き）' : '')
+      + '\n　見込みの合計：' + yen(p.expected) + '（' + (p.legacy ? '明日' : '今日') + '以降の日の団体売上を、その日のイベントの見込みに）';
   };
   r.money.forEach(function (x) {
     if (x.error) { lines.push(x.tab + '：' + x.error); return; }
@@ -1948,13 +1950,13 @@ function reimportMessage_(r) {
     lines.push(planLine(p));
     (r.hand || []).forEach(function (h) {
       if (h.month !== p.month) return;
-      lines.push(h.error ? '　' + h.error : '　「' + h.tab + '」に写した日 ' + h.days + '日・売上の合計 ' + yen(h.sales));
+      lines.push(h.error ? '　' + h.error : '　「' + h.tab + '」に写した日 ' + h.days + '日・売上の合計（今日まで） ' + yen(h.sales));
     });
   });
   (r.hand || []).forEach(function (h) { // 予定の取り込みの月に入っていない手打ちのタブ
     if (r.plans.tabs.some(function (p) { return p.month === h.month && p.legacy === false; })) return;
     lines.push('■ ' + h.tab);
-    lines.push(h.error ? '　' + h.error : '　写した日 ' + h.days + '日・売上の合計 ' + yen(h.sales));
+    lines.push(h.error ? '　' + h.error : '　写した日 ' + h.days + '日・売上の合計（今日まで） ' + yen(h.sales));
   });
   var oct = r.money.filter(function (x) { return x.tab === '10月' && !x.error; })[0];
   if (oct) lines.push('', '10月の売上の合計：' + yen(oct.sales) + '（' + oct.until + '）');
@@ -2045,8 +2047,9 @@ function markHandTab_(sh) {
   } catch (e) { /* 注意を付けられなくても先へ */ }
 }
 
-/** 管理シートのタブ（2次元の値）を、手打ちのタブに写す。写した日数（何か入っている日）と売上の合計を返す */
-function copyHandTab_(sh, values, month, settings) {
+/** 管理シートのタブ（2次元の値）を、手打ちのタブに写す。写した日数（何か入っている日）と、今日までの売上の合計を返す */
+function copyHandTab_(sh, values, month, settings, today) {
+  today = today || serverBizDate_(settings);
   var parsed = parseLegacyTab_(values, month, '9999-12-31', null);
   var byDate = {};
   parsed.days.forEach(function (d) { byDate[d.date] = d; });
@@ -2066,7 +2069,7 @@ function copyHandTab_(sh, values, month, settings) {
         var any = money.some(function (v) { return v !== 0; });
         if (any) for (var k = 0; k < money.length; k++) row[7 + k] = money[k]; // 金額が1つもない日は、金額の列を空にする
         if (any || row.slice(2, 7).some(String)) days += 1;
-        sales += d.cash + d.group + d.cashless + (settings.pointCountsAsSales === false ? 0 : d.point);
+        if (date <= today) sales += d.cash + d.group + d.cashless + (settings.pointCountsAsSales === false ? 0 : d.point); // 売上の合計は今日まで（先の日の団体売上は見込み）
       }
     }
     rows.push(row);
@@ -2078,7 +2081,7 @@ function copyHandTab_(sh, values, month, settings) {
 }
 
 /** 手打ちのタブがある月（運用開始日の月〜2か月先）を、管理シートから写す（ロックの中で呼ぶ） */
-function copyHandTabs_(source, settings) {
+function copyHandTabs_(source, settings, today) {
   var ss = SpreadsheetApp.getActive();
   var goLive = String(settings.goLiveDate || '').slice(0, 7);
   var to = nextMonth_(nextMonth_(Utilities.formatDate(now_(), TZ, 'yyyy-MM')));
@@ -2089,7 +2092,7 @@ function copyHandTabs_(source, settings) {
     if (!hand) continue;
     var src = legacySourceTab_(source, m);
     if (!src) { out.push({ tab: hand.getName(), month: m, error: '管理シートに「' + monthTabLabel_(m) + '」のタブがありません（写していません）' }); continue; }
-    var r = copyHandTab_(hand, src.sheet.getDataRange().getValues(), m, settings);
+    var r = copyHandTab_(hand, src.sheet.getDataRange().getValues(), m, settings, today);
     out.push({ tab: hand.getName(), month: m, from: src.name, days: r.days, sales: r.sales });
   }
   return out;
@@ -2100,9 +2103,10 @@ function copyHandTabs_(source, settings) {
  * 9月・10月：管理シートの内容で上書き。11月以降：アプリの予定（またはアプリのタブ）にもう入っている日は飛ばし、空いている日だけ入れる
  * （前にこの取り込みで入れて、そのあと誰も直していない日は、管理シートの内容に合わせ直す）。入れたら、その月のアプリのタブのシフト・イベントの欄も書き換える
  */
-function importLegacyPlans_(source) {
+function importLegacyPlans_(source, today) {
   var settings = getSettings_();
   var now = nowIso_();
+  today = today || serverBizDate_(settings);
   var ctx = { mgr: true, settings: settings, deviceId: LEGACY_PLAN_DEVICE, by: '管理シートの取り込み', force: true };
   var tabs = legacyPlanTabs_(source, settings);
   if (tabs.some(function (t) { return !t.legacy; })) catchUpSheetEdits_(settings, true); // アプリのタブで打って、まだアプリに入っていない分を先に入れる
@@ -2128,7 +2132,7 @@ function importLegacyPlans_(source) {
     months.push(tb.month);
     if (!tb.legacy) appMonths.push(tb.month);
     var parsed = parseLegacyTab_(tb.sheet.getDataRange().getValues(), tb.month, '9999-12-31', null); // 先の日（予定）も入れる
-    var t = { tab: tb.tab, month: tb.month, legacy: tb.legacy, days: 0, people: 0, closedDays: 0, events: 0, skipped: 0 };
+    var t = { tab: tb.tab, month: tb.month, legacy: tb.legacy, days: 0, people: 0, closedDays: 0, events: 0, skipped: 0, expected: 0 };
     parsed.days.forEach(function (d) {
       var cells = d.shiftCells.slice(0, LEGACY_PLAN_SHIFT_COLS).filter(String);
       var closed = cells.indexOf('店休日') >= 0;
@@ -2142,6 +2146,11 @@ function importLegacyPlans_(source) {
         if (has) t.skipped += 1;
         return;
       }
+      // 見込み：管理シートには見込みの列がなく、まだ来ていない日の「団体売上」に、その日のイベントの金額（合計）が書いてある。
+      // その日の最初のイベントの見込みにする（イベントの名前がなければ「イベント」を足す）。9月・10月は今日まで金額として取り込むので、明日から
+      var future = tb.legacy ? d.date > today : d.date >= today;
+      var amount = future ? Number(d.group) || 0 : 0;
+      if (amount > 0 && !titles.length) titles.push('イベント');
       var cur = dayRows[d.date];
       var ours = cur && (tb.legacy ? cur.memo === LEGACY_PLAN_MARK : cur.deviceId === LEGACY_PLAN_DEVICE);
       if (names.length || closed || ours) {
@@ -2151,17 +2160,19 @@ function importLegacyPlans_(source) {
       else if (titles.length) t.days += 1;
       t.people += names.length;
       if (closed) t.closedDays += 1;
-      titles.forEach(function (title) {
+      t.expected += amount;
+      titles.forEach(function (title, k) {
         var id = 'lg-' + d.date + '-' + title;
         keep[id] = true;
         t.events += 1;
         var data = { date: d.date, title: title, status: '有効', memo: LEGACY_PLAN_MARK, updatedAt: now };
+        if (future) data.expectedAmount = k === 0 && amount > 0 ? amount : null; // 過ぎた日の見込みは触らない（カウンターにも入らない）
         if (!eventById[id]) { data.type = type; data.createdAt = now; }
         eventOps.push({ opId: 'lge-' + id + '-' + now, id: id, data: data });
       });
     });
     res.tabs.push(t);
-    res.days += t.days; res.people += t.people; res.closedDays += t.closedDays; res.events += t.events; res.skipped += t.skipped;
+    res.days += t.days; res.people += t.people; res.closedDays += t.closedDays; res.events += t.events; res.skipped += t.skipped; res.expected = (res.expected || 0) + t.expected;
   });
   eventRows.forEach(function (e) { // 前に取り込んで、管理シートから消えたイベントは削除にする（11月以降は、飛ばした日と、直された予定は触らない）
     var id = String(e.id);

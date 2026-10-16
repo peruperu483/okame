@@ -64,7 +64,7 @@ test('11月：空いている日だけ入れ、アプリの予定やアプリの
   const { env } = prepared();
   const r = plain(env.gas.reimportLegacy_(source(), '2026-10-20'));
   const nov = r.plans.tabs.find(t => t.tab === '11月');
-  assert.deepEqual(nov, { tab: '11月', month: '2026-11', legacy: false, days: 3, people: 4, closedDays: 1, events: 3, skipped: 4 });
+  assert.deepEqual(nov, { tab: '11月', month: '2026-11', legacy: false, days: 3, people: 4, closedDays: 1, events: 3, skipped: 4, expected: 0 });
   const d = days(env);
   assert.equal(d['2026-11-01']['シフト予定'], '岡本');
   assert.equal(d['2026-11-02']['シフト予定'], '加奈'); // 上書きしない
@@ -85,7 +85,7 @@ test('11月：空いている日だけ入れ、アプリの予定やアプリの
   assert.equal(g[1][10], ''); // 金額の列は空のまま
   // 12月（アプリのタブはまだない）も入る
   assert.equal(d['2026-12-01']['シフト予定'], '岡本');
-  assert.deepEqual(plain(r.plans.tabs.find(t => t.tab === '12月')), { tab: '12月', month: '2026-12', legacy: false, days: 1, people: 1, closedDays: 0, events: 0, skipped: 0 });
+  assert.deepEqual(plain(r.plans.tabs.find(t => t.tab === '12月')), { tab: '12月', month: '2026-12', legacy: false, days: 1, people: 1, closedDays: 0, events: 0, skipped: 0, expected: 0 });
   // 売上は変わらない
   assert.equal(env.call('monthly', { mgrToken: env.login(), month: '2026-11' }).summary.sales, 0);
   // 表示
@@ -99,7 +99,7 @@ test('11月：何度実行しても二重にならない。取り込んだあと
   env.gas.reimportLegacy_(source(), '2026-10-20');
   const daysCount = env.ss.getSheetByName('営業日').dump().length, evCount = events(env).length;
   const r2 = plain(env.gas.reimportLegacy_(source(), '2026-10-20'));
-  assert.deepEqual(plain(r2.plans.tabs.find(t => t.tab === '11月')), { tab: '11月', month: '2026-11', legacy: false, days: 3, people: 4, closedDays: 1, events: 3, skipped: 4 });
+  assert.deepEqual(plain(r2.plans.tabs.find(t => t.tab === '11月')), { tab: '11月', month: '2026-11', legacy: false, days: 3, people: 4, closedDays: 1, events: 3, skipped: 4, expected: 0 });
   assert.equal(env.ss.getSheetByName('営業日').dump().length, daysCount);
   assert.equal(events(env).length, evCount);
   // アプリで 11/10 のシフトを直す → 次の取り込みでは飛ばす

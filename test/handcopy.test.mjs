@@ -63,7 +63,7 @@ test('手打ちのタブを、管理シートの11月の写しにする。写す
   assert.equal(env.call('monthly', { mgrToken: env.login(), month: '2026-11' }).summary.sales, 0);
   // 表示
   const msg = env.gas.reimportMessage_(r2);
-  assert.match(msg, /「11月（手打ち）」に写した日 4日・売上の合計 ¥106,000/);
+  assert.match(msg, /「11月（手打ち）」に写した日 4日・売上の合計（今日まで） ¥106,000/);
 });
 
 test('手打ちのタブがない月・管理シートにタブがない月', () => {

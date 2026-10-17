@@ -5,7 +5,7 @@ import { nowIso, fmtHM, timeOnBizDay, addDays } from '../bizday.js';
 import {
   KIND_NOMI, KIND_TANPIN, KIND_EVENT, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT,
   nextNo, label, baseAmount, extrasTotal, total, paidTotal, remaining, overpaid, methodSums, receive,
-  timeState, timeText, liveExtras, livePays, markDeleted
+  timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel
 } from '../calc.js';
 import { openSheet, pickReason, stepper } from '../ui.js';
 
@@ -239,8 +239,10 @@ export function renderStore(root, app) {
       oninput: e => { d.addAmt = e.target.value; }
     });
     const extras = liveExtras(v).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
-      h('span', { class: 'xlabel' }, x.type === EXTRA_EXT ? `${x.label}　${yen(x.amount)}` : yen(x.amount), d.editId === x.id ? '　← 直している' : ''),
-      x.type === EXTRA_EXT ? null : h('button', { class: 'btn btn-xs', onclick: () => { d.editId = x.id; d.addAmt = String(x.amount); paintDetail(); } }, '直す'),
+      h('span', { class: 'xlabel' }, x.type === EXTRA_EXT ? `${extraLabel(x)}　${yen(x.amount)}` : yen(x.amount), d.editId === x.id ? '　← 直している' : ''),
+      x.type === EXTRA_EXT
+        ? h('button', { class: 'btn btn-xs', onclick: () => pickExtension(v, x) }, '人数を直す')
+        : h('button', { class: 'btn btn-xs', onclick: () => { d.editId = x.id; d.addAmt = String(x.amount); paintDetail(); } }, '直す'),
       h('button', { class: 'btn btn-xs danger', onclick: () => delExtra(v, x) }, '消す')));
     const exts = S().extensions || [];
     const addBox = h('div', { class: 'det-box' },
@@ -252,7 +254,7 @@ export function renderStore(root, app) {
         h('button', { class: 'btn btn-primary', onclick: () => addCustom(v) }, d.editId ? '直す' : '足す')),
       d.editId ? h('button', { class: 'btn btn-sm', onclick: () => { d.editId = null; d.addAmt = ''; paintDetail(); } }, '直すのをやめる') : null,
       exts.length && v.kind === KIND_NOMI ? [h('div', { class: 'lab' }, '延長'),
-        h('div', { class: 'quick' }, exts.map(x => h('button', { class: 'btn', onclick: () => addExtension(v, x) }, `${x.label}（+${yen(x.price * v.people)}）`)))] : null);
+        h('div', { class: 'quick' }, exts.map(x => h('button', { class: 'btn', onclick: () => pickExtension(v, null, x) }, `${x.label}（1人 ${yen(x.price)}）`)))] : null);
 
     // --- 会計 ---
     const payInput = h('input', {
@@ -322,11 +324,43 @@ export function renderStore(root, app) {
     await saveVisit(v, { extras: markDeleted(v.extras, x.id) }, { type: x.type === EXTRA_EXT ? '延長を外す' : '追加を消す', reason: '', before: x });
   }
 
-  async function addExtension(v, x) {
+  /**
+   * 延長する人数を選ぶ（初期値は卓の人数）。cur を渡すと、足した延長の人数を直す
+   * 金額＝1人の延長料金×人数。卓の時間は、1人でも延長すれば延びる（同じ卓で2回目の延長もできる）
+   */
+  function pickExtension(v, cur, x) {
+    const people = Math.max(1, Number(v.people) || 1);
+    const unit = cur ? (Number(cur.unit) || Math.round((Number(cur.amount) || 0) / (Number(cur.count) || people))) : Number(x.price) || 0;
+    const name = cur ? cur.label : x.label;
+    const start = cur ? (Number(cur.count) || people) : people;
+    const sum = h('div', { class: 'ext-sum num' });
+    const paintSum = c => { sum.textContent = `${name} ×${c}人 ＝ ${yen(unit * c)}`; };
+    const step = stepper(Math.min(start, Math.max(people, start)), { min: 1, max: Math.max(people, start), onChange: paintSum });
+    paintSum(step.value());
+    openSheet(close => [
+      h('h2', {}, cur ? `${name}の人数を直す` : `${name}（1人 ${yen(unit)}）`),
+      h('p', { class: 'help' }, `延長する人数（卓は${people}名）。1人でも延長すれば、卓の時間は延びます。`),
+      step, sum,
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn', onclick: close }, 'やめる'),
+        h('button', { class: 'btn btn-primary', onclick: async () => { close(); await saveExtension(v, cur, x, step.value(), unit); } }, cur ? '直す' : '延長する'))
+    ]);
+  }
+
+  async function saveExtension(v, cur, x, count, unit) {
     v = await liveVisit(v);
     if (!v) return;
-    await saveVisit(v, { extras: [...(v.extras || []), { id: uuid(), type: EXTRA_EXT, label: x.label, amount: Number(x.price) * Number(v.people), minutes: Number(x.minutes), at: nowIso() }] });
-    toast(`${x.label}を足しました`);
+    if (!cur) {
+      await saveVisit(v, { extras: [...(v.extras || []), { id: uuid(), ...extensionExtra(x, count), at: nowIso() }] });
+      toast(`${x.label} ×${count}人を足しました`);
+      return;
+    }
+    const before = liveExtras(v).find(e => e.id === cur.id);
+    if (!before) return;
+    const after = { ...before, unit, count, amount: unit * count };
+    const extras = (v.extras || []).map(e => (e.id === cur.id ? after : e));
+    await saveVisit(v, { extras }, { type: '延長の人数を直す', reason: '', before: { label: before.label, count: before.count ?? '', amount: before.amount }, after: { label: after.label, count, amount: after.amount } });
+    toast('延長の人数を直しました');
   }
 
   // --- 会計の操作 ---

@@ -90,6 +90,21 @@ export function payLabel(v) {
   return pays.length ? pays.map(p => `${p.method} ${yen(p.amount)}`).join(' ＋ ') : '0円';
 }
 
+/**
+ * 延長：選んだ人数だけにかける。金額＝1人の延長料金×人数。卓の時間は、1人でも延長すれば延びる
+ * 前の版の延長（人数の記録がない）は、卓の全員にかけた分
+ */
+export function extensionExtra(x, count) {
+  const c = Math.max(1, Math.floor(n(count)));
+  return { type: EXTRA_EXT, label: x.label, unit: n(x.price), count: c, amount: n(x.price) * c, minutes: n(x.minutes) };
+}
+
+/** 追加・延長の明細の名前：「延長2時間 ×3人」 */
+export function extraLabel(x) {
+  if (x.type !== EXTRA_EXT) return '追加';
+  return `${x.label || '延長'}` + (n(x.count) > 0 ? ` ×${n(x.count)}人` : '');
+}
+
 /** 飲み放題の時間（延長を足した合計・分） */
 export function nomiMinutes(v, s) {
   return n(s.nomiMinutes) + liveExtras(v).filter(x => x.type === EXTRA_EXT).reduce((a, x) => a + n(x.minutes), 0);

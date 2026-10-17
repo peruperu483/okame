@@ -512,6 +512,7 @@ button { cursor: pointer; }
 .cd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .cd-big { font-size: 34px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
 .cd-big.ok { color: var(--accent); }
+.ext-sum { font-size: 20px; font-weight: 700; text-align: center; margin: 12px 0; }
 .cd-sub { font-size: 14px; color: var(--text2); }
 .cd-cap { font-size: 13px; margin-top: 4px; }
 .cd-bar { display: flex; height: 14px; border-radius: 7px; background: #EDEDEA; overflow: hidden; }

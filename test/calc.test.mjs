@@ -186,3 +186,16 @@ test('仕入れ：その他は内容が必須。月の集計は科目ごと', as
   assert.deepEqual(s.by['その他'], { count: 1, amount: 3300, notes: ['花'] });
   assert.equal(s.total, 36170);
 });
+
+test('延長は選んだ人数だけ：金額＝1人の料金×人数。1人でも延長すれば時間は延び、2回目もできる', async () => {
+  const { extensionExtra, extraLabel, nomiMinutes } = await import('../v2/js/calc.js');
+  const ext = { label: '延長2時間', price: 2000, minutes: 120 };
+  const x1 = { id: 'a', ...extensionExtra(ext, 3) };
+  assert.deepEqual([x1.amount, x1.count, x1.unit, x1.minutes], [6000, 3, 2000, 120]);
+  assert.equal(extraLabel(x1), '延長2時間 ×3人');
+  assert.equal(extraLabel({ type: '延長', label: '延長1時間', amount: 4000 }), '延長1時間'); // 前の版の延長（人数の記録なし）
+  const v = { base: 15000, people: 5, kind: '飲み放題', inAt, extras: [x1, { id: 'b', ...extensionExtra(ext, 1) }] };
+  assert.equal(total(v), 15000 + 6000 + 2000);
+  assert.equal(nomiMinutes(v, S), 120 + 120 + 120);
+  assert.equal(extensionExtra(ext, 0).count, 1); // 0人にはしない
+});

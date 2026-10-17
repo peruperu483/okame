@@ -160,7 +160,8 @@ var DEFAULT_SETTINGS = {
   // 月のタブのシフトのプルダウン：列2・列3・列4の選択肢。列5は、店長とスタッフと「店休日」
   shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']],
   pettyCashStart: 0, // 小口現金の最初の残高（わかったら店長が入れる。入れるまでは0から数える）
-  eventUnitPrices: [3000, 4000, 5000] // イベントの1人の単価のボタン（予定と入店）
+  eventUnitPrices: [3000, 4000, 5000], // イベントの1人の単価のボタン（予定と入店）
+  trialStartDate: '2026-10-16' // 試運転を始めた日。この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに出す（集計には入れない）
 };
 
 var SETTING_LABELS = {
@@ -191,7 +192,8 @@ var SETTING_LABELS = {
   monthlyTargets: '月ごとの売上目標（月 → 円）',
   shiftColumnChoices: '月のタブのシフトのプルダウン（列2・列3・列4の選択肢）',
   pettyCashStart: '小口現金の最初の残高（円）',
-  eventUnitPrices: 'イベントの1人の単価のボタン（円）'
+  eventUnitPrices: 'イベントの1人の単価のボタン（円）',
+  trialStartDate: '試運転を始めた日（この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに見るためだけに出す）'
 };
 
 var MGR_TTL_SEC = 2 * 60 * 60;
@@ -939,7 +941,8 @@ function importLegacy_(source, today) {
   var tpl = prepareMonthTemplate_(ss, source.getSheetByName('9月'));
   Object.keys(LEGACY_TABS).forEach(function (tab) {
     if (!parsedByTab[tab]) return;
-    writeMonthTab_(ss, tpl, tab, LEGACY_TABS[tab], parsedByTab[tab].days);
+    var legacySheet = writeMonthTab_(ss, tpl, tab, LEGACY_TABS[tab], parsedByTab[tab].days);
+    if (trialAppMonths_(settings).indexOf(LEGACY_TABS[tab]) >= 0) writeTrialDiffRow_(legacySheet, LEGACY_TABS[tab], settings);
   });
   removeOldReconcileTab_(ss);
   arrangeTabs_(ss, monthTabNames_(ss, settings));
@@ -1245,7 +1248,11 @@ function monthOfAppTab_(name, settings) {
 
 /** 下のタブの並び：9月・10月・11月（アプリ）・11月（手打ち）・12月… */
 function monthTabNames_(ss, settings) {
-  var names = Object.keys(LEGACY_TABS);
+  var names = [];
+  Object.keys(LEGACY_TABS).forEach(function (tab) {
+    names.push(tab);
+    if (ss.getSheetByName(tab + APP_TAB_SUFFIX)) names.push(tab + APP_TAB_SUFFIX); // 試運転のアプリのタブ（10月（アプリ））
+  });
   planMonths_(settings).forEach(function (m) {
     var app = appTab_(ss, m), hand = ss.getSheetByName(monthTabLabel_(m) + HAND_TAB_SUFFIX);
     if (app) names.push(app.getName());
@@ -1347,9 +1354,11 @@ function splitNames_(s) { return String(s || '').split(/[、,，\s]+/).filter(St
  * シフトは、実績があれば実績、なければ予定。イベントは予定の名前に、予定にない実際の入店のイベントの名前を足す
  * （予定のイベントと同じ組なら、名前は1つにまとめる）。見込みは、その日の予定の「見込みの金額」の合計
  */
-function appPlanByDate_(month, settings) {
+function appPlanByDate_(month, settings, trial) { // trial：{from, to}（試運転のアプリのタブ。その期間の予定と、試運転の印のイベントの組も入れる）
   var goLive = String(settings.goLiveDate || '');
-  var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
+  var inMonth = trial
+    ? function (d) { d = String(d || '').slice(0, 10); return monthOf_(d) === month && d >= trial.from && d < trial.to; }
+    : function (d) { return monthOf_(d) === month && counted_(d, goLive); };
   var out = {};
   var at = function (d) { return out[d] = out[d] || { shiftCells: ['', '', '', ''], closed: false, event: '', expected: '' }; };
   var titles = {}, plannedIds = {}, expected = {};
@@ -1360,7 +1369,7 @@ function appPlanByDate_(month, settings) {
     expected[e.date] = (expected[e.date] || 0) + (Number(e.expectedAmount) || 0);
   });
   readTable_(TABLES.visits).rows.forEach(function (v) {
-    if (v.kind !== 'イベント' || v.status === '削除' || v.trial === true || !v.name || !inMonth(v.bizDate)) return;
+    if (v.kind !== 'イベント' || v.status === '削除' || (v.trial === true && !trial) || !v.name || !inMonth(v.bizDate)) return;
     if (v.eventId && plannedIds[v.eventId]) return; // 予定のイベントの組は、予定の名前に1つにまとめる
     var list = titles[v.bizDate] = titles[v.bizDate] || [];
     if (list.indexOf(String(v.name)) < 0) list.push(String(v.name));
@@ -1441,10 +1450,13 @@ function countdownSummary_(month, settings) {
 }
 
 /** その月の日ごとの数字（管理シートの形：parseLegacyTab_ の1日分と同じ項目）。amounts が false の日は、金額の列を空にする */
-function appMonthDays_(month, settings) {
+function appMonthDays_(month, settings, trial) {
+  // trial：{from, to}（試運転のアプリのタブ）。その期間の記録を、試運転の印が付いていても入れる。固定費は入れない（その月は管理シートの数字）
   var goLive = String(settings.goLiveDate || '');
   var n = function (v) { return Number(v) || 0; };
-  var inMonth = function (d) { return monthOf_(d) === month && counted_(d, goLive); };
+  var inMonth = trial
+    ? function (d) { d = String(d || '').slice(0, 10); return monthOf_(d) === month && d >= trial.from && d < trial.to; }
+    : function (d) { return monthOf_(d) === month && counted_(d, goLive); };
   var today = serverBizDate_(settings);
   var byDate = {};
   var at = function (d, money) {
@@ -1454,14 +1466,14 @@ function appMonthDays_(month, settings) {
     return f;
   };
   var n2 = daysInMonth_(month);
-  for (var i = 1; i <= n2; i++) { var d0 = month + '-' + pad2_(i); if (d0 <= today && counted_(d0, goLive)) at(d0, true); }
+  for (var i = 1; i <= n2; i++) { var d0 = month + '-' + pad2_(i); if (d0 <= today && inMonth(d0)) at(d0, true); }
   readTable_(TABLES.visits).rows.forEach(function (v) {
-    if (v.status !== '退店' || v.trial === true || !inMonth(v.bizDate)) return;
+    if (v.status !== '退店' || (v.trial === true && !trial) || !inMonth(v.bizDate)) return;
     var f = at(v.bizDate, true);
     if (v.kind === 'イベント') f.group += n(v.total) - (settings.pointCountsAsSales === false ? n(v.point) : 0);
     else { f.cash += n(v.cash); f.cashless += n(v.cashless); f.point += n(v.point); }
   });
-  readTable_(TABLES.closings).rows.forEach(function (c) { if (c.trial !== true && inMonth(c.bizDate)) at(c.bizDate, true); });
+  readTable_(TABLES.closings).rows.forEach(function (c) { if ((c.trial !== true || trial) && inMonth(c.bizDate)) at(c.bizDate, true); });
   readTable_(TABLES.purchases).rows.forEach(function (p) {
     if (p.status === '削除' || !inMonth(p.date)) return;
     at(p.date, true)[p.category === '飲食物' ? 'food' : 'other'] += n(p.amount);
@@ -1471,14 +1483,14 @@ function appMonthDays_(month, settings) {
     var f = at(a.bizDate, true);
     if (a.name === '加奈' && a.kind !== '手打ち') f.laborKana += n(a.cost); else f.laborOther += n(a.cost);
   });
-  var plan = appPlanByDate_(month, settings);
+  var plan = appPlanByDate_(month, settings, trial);
   Object.keys(plan).forEach(function (d) {
     var f = at(d), p = plan[d];
     f.shiftCells = p.shiftCells; f.closed = p.closed; f.event = p.event; f.expected = p.expected;
   });
   // 固定費は月に1回の入力なので、月の1日の行に入れる
   readTable_(TABLES.fixedCosts).rows.forEach(function (f) {
-    if (f.status === '削除' || f.month !== month || !counted_(f.month, goLive)) return;
+    if (trial || f.status === '削除' || f.month !== month || !counted_(f.month, goLive)) return;
     var first = at(month + '-01');
     first.fixed[f.item] = (first.fixed[f.item] || 0) + n(f.amount);
   });
@@ -1548,6 +1560,64 @@ function rebuildAppMonthTab_(month) {
   savePlanSnapshot_(month, sh);
   if (!existed || sh !== old) arrangeTabs_(ss, monthTabNames_(ss, settings)); // 新しく作った（古い形のタブを作り直した）ときは、タブの並びも直す
   return label;
+}
+
+// ===== 試運転のアプリのタブ（「10月（アプリ）」）=====
+// 試運転を始めた日（設定 trialStartDate）から運用開始日の前日までのアプリの記録を、11月（アプリ）と同じ形で出す（試運転の印が付いていても入れる）。
+// 見るだけ（全部保護。スプシで打ってもアプリには入らない）。閉店のたびに書き換える。月次・カウンター・取り込みの数字は変えない。
+// 隣の「10月」（管理シートの写し）の一番下に「アプリとの差」の行（試運転を始めた日からの合計どうし）
+
+/** 試運転のアプリのタブを作る月（試運転を始めた日の月 〜 運用開始日の前日の月） */
+function trialAppMonths_(settings) {
+  var r = trialRange_(settings);
+  if (!r) return [];
+  var out = [], m = r.from.slice(0, 7), last = addDays_(r.to, -1).slice(0, 7);
+  while (m <= last && out.length < 3) { out.push(m); m = nextMonth_(m); }
+  return out;
+}
+
+/** 試運転の期間 {from: 始めた日, to: 運用開始日（この日は含まない）}。なければ null */
+function trialRange_(settings) {
+  var from = String(settings.trialStartDate || ''), to = String(settings.goLiveDate || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from >= to) return null;
+  return { from: from, to: to };
+}
+
+/** 試運転のアプリのタブを、すべて作り直す。作ったタブの名前 */
+function rebuildTrialAppTabs_() {
+  var settings = getSettings_();
+  return trialAppMonths_(settings).map(function (m) { return rebuildTrialAppTab_(m, settings); });
+}
+
+function rebuildTrialAppTab_(month, settings) {
+  settings = settings || getSettings_();
+  var r = trialRange_(settings);
+  var ss = SpreadsheetApp.getActive();
+  var name = monthTabLabel_(month) + APP_TAB_SUFFIX;
+  var existed = !!ss.getSheetByName(name);
+  var sh = writeMonthTab_(ss, getPlanTemplate_(ss), name, month, appMonthDays_(month, settings, r), true);
+  protect_(sh, []); // 見るだけ（シフト・イベントの欄も打てなくする）
+  var from = r.from > month + '-01' ? r.from : month + '-01';
+  sh.getRange(1, 21).setValue('試運転（' + Number(from.slice(5, 7)) + '/' + Number(from.slice(8, 10)) + '〜）のアプリの記録。見るだけ。閉店のたびに書き換えます（月次・カウンターには入りません）');
+  var legacy = ss.getSheetByName(monthTabLabel_(month));
+  if (legacy && LEGACY_TABS[monthTabLabel_(month)] === month) writeTrialDiffRow_(legacy, month, settings);
+  if (!existed) arrangeTabs_(ss, monthTabNames_(ss, settings));
+  return name;
+}
+
+/** 管理シートの写しの月のタブ（「10月」）の一番下に、試運転を始めた日からの「アプリとの差」（アプリ − 管理シート）。式なので自動で変わる */
+function writeTrialDiffRow_(sh, month, settings) {
+  var r = trialRange_(settings);
+  if (!r) return;
+  var from = r.from > month + '-01' ? r.from : month + '-01';
+  var endDay = r.to.slice(0, 7) === month ? Number(r.to.slice(8, 10)) - 1 : daysInMonth_(month);
+  var top = Number(from.slice(8, 10)) + 1, bottom = endDay + 1; // 日の行は「日＋1」行目
+  var appName = monthTabLabel_(month) + APP_TAB_SUFFIX;
+  var hand = 'HIJKLMNOPQR'.split(''), appCols = 'IJKLMNOPQRS'.split(''); // アプリのタブは「見込み」の列が1つ多い
+  sh.getRange(HAND_DIFF_ROW, 1).setValue('アプリとの差（' + Number(from.slice(5, 7)) + '/' + Number(from.slice(8, 10)) + '〜の合計。アプリ − 管理シート）').setFontWeight('bold');
+  sh.getRange(HAND_DIFF_ROW, 8, 1, 11).setFormulas([hand.map(function (c, k) {
+    return '=IFERROR(SUM(INDIRECT("\'' + appName + '\'!' + appCols[k] + top + ':' + appCols[k] + bottom + '"))-SUM(' + c + top + ':' + c + bottom + '),"")';
+  })]).setNumberFormat(YEN_FORMAT).setFontWeight('bold');
 }
 
 /** シフト・店休日・イベント・見込みの列だけ、アプリの内容に書き換える（アプリの予定を直したとき。金額は触らない） */
@@ -1910,6 +1980,8 @@ function rebuildTabsAfterSync_(ops) {
   try {
     var settings = getSettings_();
     var allowed = planMonths_(settings);
+    var trialMonths = trialAppMonths_(settings); // 試運転のアプリのタブ（10月（アプリ））も、閉店などのたびに書き換える
+    allowed = allowed.concat(trialMonths.filter(function (m) { return allowed.indexOf(m) < 0; }));
     var ss = SpreadsheetApp.getActive();
     var full = {}, light = {};
     var ids = {};       // 表 → {ID → 日付}。送られてきた操作に日付がないとき（変えた項目だけを送るため）、記録から探す
@@ -1949,8 +2021,8 @@ function rebuildTabsAfterSync_(ops) {
       }
       (kind === 'full' ? full : light)[m] = true;
     });
-    Object.keys(full).forEach(function (m) { rebuildAppMonthTab_(m); });
-    Object.keys(light).forEach(function (m) { if (!full[m] && appTab_(ss, m)) refreshPlanColumns_(m); });
+    Object.keys(full).forEach(function (m) { if (trialMonths.indexOf(m) >= 0) rebuildTrialAppTab_(m, settings); else rebuildAppMonthTab_(m); });
+    Object.keys(light).forEach(function (m) { if (!full[m] && trialMonths.indexOf(m) < 0 && appTab_(ss, m)) refreshPlanColumns_(m); });
   } catch (e) {
     console.error('月のタブを書き換えられませんでした：' + e.message);
   }
@@ -1979,6 +2051,7 @@ function openLegacySource_(ui, title) {
 function reimportLegacy_(source, today) { // 予定は、9月・10月に加えて、管理シートに11月以降のタブがあれば、その月も（空いている日だけ）。手打ちのタブは、管理シートの写しにする
   var money = importLegacy_(source, today);
   var plans = importLegacyPlans_(source, today);
+  try { rebuildTrialAppTabs_(); } catch (e) { console.error('試運転のアプリのタブを作れませんでした：' + e.message); }
   return { today: today, money: money, plans: plans, hand: copyHandTabs_(source, getSettings_(), today) };
 }
 

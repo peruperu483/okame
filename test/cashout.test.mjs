@@ -92,5 +92,9 @@ test('GAS：前の版の表（「内訳」の列がない）でも、送られ�
   assert.equal(env.call('bootstrap').settings.pettyCashStart, 0);
   env.call('saveSettings', { mgrToken, settings: { pettyCashStart: 12345 } });
   assert.equal(env.call('bootstrap').settings.pettyCashStart, 12345);
-  assert.equal(env.call('bootstrap').version, '0.18.0');
+  assert.ok(env.call('bootstrap').version.localeCompare('0.18.0', undefined, { numeric: true }) >= 0); // 内訳を受け取れる版（画面はこれを見て入力を切り替える）
+  // 店長モードが自動で終わるまでの分（初期10分）も、設定で変えられる
+  assert.equal(env.call('bootstrap').settings.mgrIdleMinutes, 10);
+  env.call('saveSettings', { mgrToken, settings: { mgrIdleMinutes: 15 } });
+  assert.equal(env.call('bootstrap').settings.mgrIdleMinutes, 15);
 });

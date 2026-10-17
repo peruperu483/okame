@@ -87,7 +87,7 @@ export function renderStore(root, app) {
 
   async function enter() {
     if (st.busy) return; // 2回押し防止
-    if (!editable()) { st.err = 'この営業日の記録は、店長モードで直せます。'; return paintEntry(); }
+    if (!editable() && !(await app.requireMgr('この営業日の記録は、店長だけが入れられます。店長の暗証番号を押してください。'))) return;
     const isEv = st.kind === KIND_EVENT;
     const endAt = isEv ? timeOnBizDay(day(), st.evEnd, S().bizDayCutoffHour ?? 12) : '';
     if (isEv && (!(Number(st.evUnit) > 0) || !endAt)) { st.err = 'イベントは、1人の単価と終了の予定時刻を入れてください。'; return paintEntry(); }
@@ -182,7 +182,7 @@ export function renderStore(root, app) {
   async function adjustPeople(v, d) {
     const cur = await app.store.getRow('visits', v.id);
     if (!cur || cur.status !== ST_IN) return;
-    if (!app.canEdit('visits', cur.bizDate)) { toast('前の営業日の組は、店長モードで直せます', 'err'); return; }
+    if (!app.canEdit('visits', cur.bizDate) && !(await app.requireMgr('前の営業日の組は、店長だけが直せます。店長の暗証番号を押してください。'))) return;
     const before = eventPeople(cur);
     if (d < 0 && before <= 0) { toast('0人より少なくはできません', 'err'); return; }
     await saveVisit(cur, { extras: [...(cur.extras || []), { id: uuid(), type: EXTRA_PEOPLE, delta: d, amount: 0, at: nowIso() }] },
@@ -243,9 +243,9 @@ export function renderStore(root, app) {
   async function liveVisit(v) {
     if (!panel || !st.det || st.openId !== v.id) return null;
     const cur = await app.store.getRow('visits', v.id);
-    if (cur && cur.status === ST_IN && !app.canEdit('visits', cur.bizDate)) { // 前の営業日の組は、バイトには直せない
-      toast('前の営業日の組は、店長モードで直せます', 'err');
-      return null;
+    if (cur && cur.status === ST_IN && !app.canEdit('visits', cur.bizDate)) { // 前の営業日の組は、バイトには直せない：数字の画面を出し、入ったら続ける
+      if (!(await app.requireMgr('前の営業日の組は、店長だけが直せます。店長の暗証番号を押してください。'))) return null;
+      if (!panel || st.openId !== v.id) return null;
     }
     return cur && cur.status === ST_IN ? cur : null;
   }

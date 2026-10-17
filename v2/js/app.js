@@ -6,7 +6,7 @@ import { idbStore } from './store.js';
 import { createApi, ApiError, NetworkError } from './api.js';
 import { createSync } from './sync.js';
 import { createAuth } from './auth.js';
-import { renderPinGate } from './screens/pin.js';
+import { renderPinGate, openPinSheet } from './screens/pin.js';
 import { renderMore } from './screens/more.js';
 import { renderStore } from './screens/store.js';
 import { renderToday } from './screens/today.js';
@@ -34,7 +34,7 @@ const store = idbStore();
 const auth = createAuth();
 const app = { store, auth, settings: null, token: null, deviceId: null, version: APP_VERSION, gasUrl: GAS_URL };
 const post = createApi({ url: GAS_URL, getToken: () => app.token, getDeviceId: () => app.deviceId, getMgrToken: () => auth.token() });
-auth.attach(post);
+auth.attach(post, () => app.settings?.mgrIdleMinutes); // 何もしないまま、この分数で店長モードが終わる（設定）
 const sync = createSync({ store, post, getDeviceId: () => app.deviceId, getMgrToken: () => auth.token() });
 Object.assign(app, { post, sync });
 
@@ -44,6 +44,13 @@ app.isTrial = (d = app.bizDate()) => isTrial(d, app.settings?.goLiveDate);
 app.canSee = key => auth.isMgr() || app.settings?.visibility?.[key] !== false;
 app.setTitle = t => { const el = $('#top-title'); if (el) el.textContent = t; };
 app.go = hash => { location.hash = hash; };
+/**
+ * 店長の暗証番号が要る操作の前に呼ぶ。店長モードならすぐ true。そうでなければ数字の画面を重ねて出し、入ったら true（画面は作り直さないので、そのまま続きができる）
+ */
+app.requireMgr = async (note = 'この操作は店長だけができます。店長の暗証番号を押してください。') => {
+  if (auth.isMgr()) return true;
+  return openPinSheet(app, { title: '店長モードに入る', note });
+};
 /** 直してよいか（GASの staffCanWrite_ と同じ判定。守りはGAS、こちらはボタンを出すかどうか） */
 app.canEdit = (table, date) => {
   if (auth.isMgr()) return true;
@@ -106,18 +113,19 @@ function boot() {
       sync.retryFailed().catch(() => {}); // 店長の許可が切れて断られた分（2時間以上あとに届いた勤怠・仕入れなど）を、今の店長として送り直す
     }
     renderChrome();
+    if (auth.isMgr() && auth.quiet) return; // 操作の途中で入ったときは、画面を作り直さない（押した操作の続きをする）
     route();
   });
   sync.onStatus(renderSyncStatus);
   setInterval(renderTopDay, 15e3);
 
   $('#app').replaceChildren(
-    h('header', { class: 'topbar' },
+    h('header', { class: 'topbar', id: 'topbar' },
       h('div', { class: 'top-title', id: 'top-title' }),
       h('div', { class: 'topbar-day', id: 'top-day' }),
       h('div', { class: 'topbar-right' },
         h('button', { class: 'sync-pill', id: 'sync-pill', onclick: openDevicePanel }),
-        h('span', { class: 'top-lock', id: 'top-lock' }),
+        h('div', { class: 'mgr-band', id: 'mgr-band' }),
         h('div', { class: 'clock', id: 'clock' }))),
     h('nav', { class: 'nav', id: 'nav', 'aria-label': 'メニュー' }),
     h('main', { class: 'main', id: 'main' })
@@ -136,7 +144,15 @@ function renderChrome() {
   if (!$('#nav')) return;
   renderTopDay();
   const mgr = auth.isMgr();
-  const lockBtn = () => h('button', { class: 'btn btn-sm lock-btn', onclick: () => { auth.lock(); toast('ロックしました'); } }, '店長ロック');
+  // 店長モードのあいだは、上の帯に色を付けて「店長モード」と出す。「終わる」でバイトの画面に戻る
+  $('#topbar').classList.toggle('mgr', mgr);
+  $('#mgr-band').replaceChildren(...(mgr ? [
+    h('span', { class: 'mgr-chip' }, '店長モード'),
+    h('span', { class: 'mgr-note' }, `さわらないまま${auth.idleMinutes()}分で終わります`),
+    h('button', { class: 'btn btn-sm mgr-end', onclick: () => { auth.lock(); toast('店長モードを終わりました'); } }, '終わる')
+  ] : [
+    h('button', { class: 'btn btn-sm mgr-enter', onclick: enterMgr, 'aria-label': '店長モードに入る' }, lockIcon(), '店長モード')
+  ]));
   $('#nav').replaceChildren(
     h('div', { class: 'brand' }, 'お香芽'),
     ...SCREENS.map(s => {
@@ -145,10 +161,15 @@ function renderChrome() {
       if (s.lock && !mgr) btn.insertAdjacentHTML('beforeend', LOCK_ICON);
       return btn;
     }),
-    h('div', { class: 'nav-space' }),
-    mgr ? lockBtn() : '');
-  $('#top-lock').replaceChildren(mgr ? lockBtn() : '');
+    h('div', { class: 'nav-space' }));
   renderSyncStatus(sync.state);
+}
+
+function lockIcon() { const s = h('span', { class: 'mgr-icon', 'aria-hidden': 'true' }); s.innerHTML = LOCK_ICON; return s; }
+
+/** 上の「店長モード」のボタン：数字の画面 → 入ったら、今の画面を店長の表示で作り直す */
+async function enterMgr() {
+  if (await openPinSheet(app, { title: '店長モードに入る', note: '店長の暗証番号を押してください。', quiet: false })) toast('店長モードに入りました');
 }
 
 function renderTopDay() {

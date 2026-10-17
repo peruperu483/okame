@@ -123,6 +123,11 @@ function renderForm(root, app) {
       listEditor('会計を取り消す理由', draft, 'cancelReasons', dirty),
       listEditor('入店を削除する理由', draft, 'deleteReasons', dirty)),
 
+    card('店長モード',
+      num('何もしないまま、この分数たったらバイトの画面に戻る', () => draft.mgrIdleMinutes ?? 10, x => { draft.mgrIdleMinutes = x; }, '分',
+        '上の帯の「終わる」でも、いつでも戻れます。アプリが裏に回ったときも戻ります。'),
+      ),
+
     card('店長報酬',
       num('店長報酬（月額）', () => draft.managerFee, x => { draft.managerFee = x; }, '円',
         '月次の支出に入ります（9月・10月の分も同じ金額で計算します）。店長だけが見られます。'),

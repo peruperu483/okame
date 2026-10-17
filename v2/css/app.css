@@ -29,6 +29,8 @@
   --nav-w: 104px;
   --top-h: 60px;
   --bottom-h: 64px;
+  --mgr: #5B3A8C;      /* 店長モードの帯 */
+  --mgr-ink: #fff;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -78,14 +80,27 @@ button { cursor: pointer; }
   display: flex; background: var(--bg); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.nav .brand, .nav .nav-space, .nav .lock-btn { display: none; }
+.nav .brand, .nav .nav-space { display: none; }
 .nav-btn {
   flex: 1; min-height: var(--bottom-h); border: none; background: none; border-radius: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   font-size: 15px; font-weight: 500; color: var(--text2);
 }
 .nav-btn.active { background: var(--accent-weak); color: var(--accent); font-weight: 700; }
-.top-lock .lock-btn { font-size: 13px; min-height: 40px; padding: 0 10px; }
+/* 店長モード：上のボタンと、店長モードのあいだの色の帯 */
+.mgr-band { display: flex; align-items: center; gap: 10px; }
+.mgr-enter { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; font-size: 14px; font-weight: 700; border-color: var(--mgr); color: var(--mgr); }
+.mgr-icon { display: inline-flex; }
+.topbar.mgr { background: var(--mgr); color: var(--mgr-ink); border-bottom-color: var(--mgr); }
+.topbar.mgr .topbar-day { color: rgba(255,255,255,.85); }
+.topbar.mgr .sync-pill { background: #fff; }
+.mgr-chip { font-size: 15px; font-weight: 700; padding: 6px 12px; border-radius: 999px; background: #fff; color: var(--mgr); white-space: nowrap; }
+.mgr-note { font-size: 12px; white-space: nowrap; opacity: .9; }
+.mgr-end { min-height: 44px; padding: 0 16px; font-weight: 700; background: #fff; color: var(--mgr); border-color: #fff; }
+.pin-title { text-align: center; }
+.pin-sheet { max-width: 340px; margin: 0 auto; text-align: center; }
+@media (max-width: 760px) { .mgr-note { display: none; } .topbar.mgr .topbar-day { display: none; } }
+@media (max-width: 520px) { .topbar .clock { display: none; } .topbar-day { display: none; } }
 
 .main { grid-area: main; min-width: 0; }
 
@@ -104,9 +119,7 @@ button { cursor: pointer; }
   }
   .nav .brand { display: block; padding: 6px 0 14px; text-align: center; font-size: 18px; font-weight: 700; color: var(--accent); }
   .nav .nav-space { display: block; flex-grow: 1; }
-  .nav .lock-btn { display: inline-flex; font-size: 13px; min-height: 44px; padding: 0 8px; }
   .nav-btn { flex: none; min-height: 64px; border-radius: var(--radius); }
-  .top-lock { display: none; }
 }
 
 /* ===== ページ ===== */

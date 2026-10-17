@@ -92,7 +92,7 @@ export function renderToday(root, app) {
     if (st.date) {
       const ro = !app.canEdit('visits', st.date);
       return put(staleBox, h('div', { class: 'alert warn row-between', role: 'status' },
-        h('span', {}, `${fmtMD(st.date)}を見ています。` + (ro ? '見るだけです（直すのは店長モードで）。' : '')),
+        h('span', {}, `${fmtMD(st.date)}を見ています。` + (ro ? '見るだけです（直すのは店長。上の「店長モード」から）。' : '')),
         h('button', { class: 'btn btn-sm', onclick: () => openDay(null) }, '今日に戻る')));
     }
     // 過ぎた日の締めと会計を見る（バイトに見せるかは設定「バイトに見せる範囲」）
@@ -284,7 +284,7 @@ export function renderToday(root, app) {
         row('数えた現金', y(c.countedCash)),
         row('差額', signedYen(Number(c.diff) || 0), true),
         h('div', { class: 'small muted2' }, `${fmtHM(c.closedAt)}に閉店` + (st.dayRow?.shiftActual ? `・入った人：${st.dayRow.shiftActual}` : '')),
-        canEdit ? h('button', { class: 'btn btn-sm', onclick: () => { st.redo = true; paintAll(); } }, '締め直す（店長）') : h('div', { class: 'small' }, '直すのは店長モードでできます。'));
+        h('button', { class: 'btn btn-sm', onclick: async () => { if (!(await app.requireMgr('締め直すのは店長だけです。店長の暗証番号を押してください。'))) return; st.redo = true; paintAll(); } }, canEdit ? '締め直す（店長）' : '店長モードで締め直す'));
     }
 
     // 開店時のレジの現金：引き継ぎ／手で入れた値／まだない（最初の1回）
@@ -326,7 +326,8 @@ export function renderToday(root, app) {
           h('input', { type: 'checkbox', checked: st.members.has(n), onchange: e => { st.membersTouched = true; e.target.checked ? st.members.add(n) : st.members.delete(n); paintAll(); } }),
           h('span', {}, n)))),
         st.dayRow?.shiftPlan ? h('div', { class: 'small muted2' }, `予定：${st.dayRow.shiftPlan}（違っていたら直してください）`) : null] : null,
-      canEdit ? h('button', { class: 'btn btn-primary btn-close', disabled: inStore.length > 0 || reg.openCash == null, onclick: () => doClose(sum, reg, closing) }, closing ? '締め直す' : '閉店する') : h('div', { class: 'small' }, '前の日の締めは、店長モードで直せます。'),
+      canEdit ? h('button', { class: 'btn btn-primary btn-close', disabled: inStore.length > 0 || reg.openCash == null, onclick: () => doClose(sum, reg, closing) }, closing ? '締め直す' : '閉店する')
+        : h('button', { class: 'btn btn-sm', onclick: async () => { if (await app.requireMgr('前の日の締めは、店長だけができます。店長の暗証番号を押してください。')) paintAll(); } }, '店長モードで締める'),
       st.closeMsg ? h('div', { class: 'pay-msg good', role: 'status' }, st.closeMsg) : null,
       closing && !st.closeMsg ? h('div', { class: 'small accent' }, `${fmtHM(closing.closedAt)}に閉店しました（数えた現金 ${yen(closing.countedCash)}・差額 ${signedYen(Number(closing.diff) || 0)}）`) : null,
       h('div', { class: 'small muted2' }, '数えた金額が、次の営業日の開店時の現金になります。'));

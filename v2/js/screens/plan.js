@@ -201,6 +201,7 @@ export function renderPlan(root, app) {
         h('button', {
           class: 'btn btn-primary', onclick: async () => {
             const d = date.value;
+            if (d && !canEdit(d) && !(await app.requireMgr('前の日の予定は、店長だけが直せます。店長の暗証番号を押してください。'))) return put(msg, msgBox('前の日の予定は、店長モードで直せます。', true));
             const err = !d ? '日付を選んでください。'
               : !canEdit(d) ? '前の日の予定は、店長モードで直せます。'
                 : type === T_REQUEST && !v.name.trim() ? '名前を入れてください。' : '';

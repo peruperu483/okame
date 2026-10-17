@@ -22,7 +22,7 @@ const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
 export function renderToday(root, app) {
   const S = () => app.settings;
   const realDay = () => app.bizDate();
-  const day = () => st.date || realDay(); // st.date：前の営業日の閉店・精算を見ているときだけ入る
+  const day = () => st.date || realDay(); // st.date：前の営業日・過ぎた日を見ているときだけ入る
   const from = () => addDays(day(), -31); // 開店時の現金を引き継ぐために、前の締めを探す範囲
   const st = {
     visits: [], moves: [], closings: [], dayRow: null, staff: [],
@@ -80,19 +80,31 @@ export function renderToday(root, app) {
 
   // ===== 前の営業日の未締め・店内に残った組：気づけるように出して、その日を開いて閉店・精算できるようにする =====
   function openDay(d) {
-    Object.assign(st, { date: d, counted: '', touched: false, members: null, membersKey: null, membersTouched: false, regForm: null, closeMsg: '', rMsg: '' });
+    Object.assign(st, { date: d, redo: false, counted: '', touched: false, members: null, membersKey: null, membersTouched: false, regForm: null, co: null, closeMsg: '', rMsg: '' });
     load();
+    if (d) { // 端末にない日の記録も、GASから読む（読めたら描き直す）
+      Promise.all([app.sync.pull('visits', d, d), app.sync.pull('closings', addDays(d, -31), d), app.sync.pull('cashMoves', addDays(d, -31), d), app.sync.pull('days', d, d)])
+        .then(() => { if (st.date === d) load(); }).catch(() => {});
+    }
+    window.scrollTo?.({ top: 0 });
   }
   function paintStale() {
     if (st.date) {
+      const ro = !app.canEdit('visits', st.date);
       return put(staleBox, h('div', { class: 'alert warn row-between', role: 'status' },
-        h('span', {}, `${fmtMD(st.date)}（前の営業日）を見ています。`),
+        h('span', {}, `${fmtMD(st.date)}を見ています。` + (ro ? '見るだけです（直すのは店長モードで）。' : '')),
         h('button', { class: 'btn btn-sm', onclick: () => openDay(null) }, '今日に戻る')));
     }
+    // 過ぎた日の締めと会計を見る（バイトに見せるかは設定「バイトに見せる範囲」）
+    const yesterday = addDays(realDay(), -1);
+    const picker = h('input', { class: 'input past-date', type: 'date', max: yesterday, value: st.pastPick || yesterday, 'aria-label': '見る日', oninput: e => { st.pastPick = e.target.value; } });
     put(staleBox, st.stale.map(x => h('div', { class: 'alert warn row-between', role: 'alert' },
       h('span', {}, `${fmtMD(x.date)}：` + [x.inStore ? `店内に${x.inStore}組残っています` : '', x.unclosed ? '閉店（レジ締め）がまだです' : ''].filter(Boolean).join('。')
         + (app.canEdit('visits', x.date) ? '' : '（店長に知らせてください。店長モードで直せます）')),
-      h('button', { class: 'btn btn-sm', onclick: () => openDay(x.date) }, 'その日を開く'))));
+      h('button', { class: 'btn btn-sm', onclick: () => openDay(x.date) }, 'その日を開く'))),
+      app.canSee('pastDays') ? h('div', { class: 'past-pick' },
+        h('span', { class: 'small muted2' }, '過ぎた日の締めと会計を見る'), picker,
+        h('button', { class: 'btn btn-sm', onclick: () => { const d = picker.value; if (d && d <= yesterday) openDay(d); } }, '見る')) : null);
   }
 
   // ===== 今日の出勤：シフト（予定）。閉店で実績が入ったら実績 =====
@@ -253,10 +265,31 @@ export function renderToday(root, app) {
     const mgr = app.auth.isMgr();
     if (st.counted === '' && closing && !st.touched) st.counted = String(closing.countedCash ?? '');
     const row = (k, v, strong) => h('div', { class: 'crow' + (strong ? ' strong' : '') }, h('span', {}, k), h('span', { class: 'num' }, v));
+    // 過ぎた日で締めてある日は、締めたときの数字をそのまま出す（見るだけ。店長は「締め直す」で今の記録から締め直せる）
+    if (st.date && closing && !st.redo) {
+      const c = closing, y = v => yen(Number(v) || 0);
+      return put(closeBox,
+        h('h2', {}, `${fmtMD(st.date)}の締め`),
+        closingIsStale(c, sum) ? h('div', { class: 'alert warn', role: 'alert' }, '締めたあとに会計が変わっています（下の数字は締めたときのもの）。') : null,
+        row('売上', y(c.sales)), row('組数・来客数', `${Number(c.groups) || 0}組・${Number(c.guests) || 0}名`),
+        row('現金・キャッシュレス・ポイント', `${y(c.cash)}・${y(c.cashless)}・${y(c.point)}`),
+        row('飲み放題・単品・イベント', `${y(c.nomi)}・${y(c.tanpin)}・${y(c.event)}`),
+        h('div', { class: 'lab' }, 'レジの計算'),
+        row('開店時のレジの現金', y(c.openCash)),
+        row('＋ 現金売上', y(c.cash)),
+        row('＋ 入金', y(c.cashIn)),
+        row('− 出金', y(c.cashOut)),
+        row('− 回収（オーナーが抜いた分）', y(c.collected)),
+        row('＝ あるはずの現金', y(c.expectedCash), true),
+        row('数えた現金', y(c.countedCash)),
+        row('差額', signedYen(Number(c.diff) || 0), true),
+        h('div', { class: 'small muted2' }, `${fmtHM(c.closedAt)}に閉店` + (st.dayRow?.shiftActual ? `・入った人：${st.dayRow.shiftActual}` : '')),
+        canEdit ? h('button', { class: 'btn btn-sm', onclick: () => { st.redo = true; paintAll(); } }, '締め直す（店長）') : h('div', { class: 'small' }, '直すのは店長モードでできます。'));
+    }
 
     // 開店時のレジの現金：引き継ぎ／手で入れた値／まだない（最初の1回）
     let openLine;
-    if (reg.openFrom === 'none' || st.editOpen) {
+    if (canEdit && (reg.openFrom === 'none' || st.editOpen)) {
       const inp = h('input', { class: 'input', type: 'number', inputmode: 'numeric', placeholder: '例：30000', value: st.dayRow?.openCash ?? '' });
       openLine = h('div', { class: 'subform' },
         h('div', { class: 'small' }, reg.openFrom === 'none' ? '開店時のレジの現金を入れてください（最初の1回だけ。次からは前の締めの金額を引き継ぎます）' : '開店時のレジの現金を直す（店長）'),
@@ -345,8 +378,8 @@ export function renderToday(root, app) {
   async function load() {
     const real = realDay();
     const recent = await app.store.listRows('visits', addDays(real, -3), real); // 前の営業日の未締めに気づくため、3日前から読む
-    st.visits = recent.filter(v => v.bizDate === day());
-    st.allMoves = await app.store.listRows('cashMoves', PETTY_FROM, real); // 小口現金の残高は全期間で数える
+    st.visits = day() >= addDays(real, -3) ? recent.filter(v => v.bizDate === day()) : await app.store.listRows('visits', day(), day()); // 過ぎた日を見ているとき
+    st.allMoves = await app.store.listRows('cashMoves', [PETTY_FROM, from()].sort()[0], real); // 小口現金の残高は全期間で数える
     st.moves = st.allMoves.filter(m => m.bizDate >= from());
     st.closings = await app.store.listRows('closings', from(), real);
     st.stale = [];

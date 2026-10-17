@@ -519,6 +519,8 @@ button { cursor: pointer; }
 .co-msg { font-size: 14px; margin-top: 4px; }
 .co-msg.ok { color: var(--accent); }
 .co-msg.bad { color: #b3261e; }
+.past-pick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.past-pick .past-date { width: auto; min-width: 160px; }
 .gwrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .g-adj { display: flex; align-items: center; justify-content: center; gap: 14px; }
 .g-adj .g-adj-n { font-size: 22px; font-weight: 700; min-width: 64px; text-align: center; }

@@ -12,9 +12,9 @@ import { canUseLines, cashOutEditor, saveCashOut, editCashOut, pettyCard } from 
 
 const PETTY_FROM = '2026-10-01'; // 小口現金の残高を数えるために読む範囲の始め
 
-const KIND_KEY = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
+const KIND_KEY = { '飲み放題': 'nomi', '常連': 'regular', '単品': 'tanpin', 'イベント': 'event' };
 const METHOD_KEY = { '現金': 'cash', 'キャッシュレス': 'cashless', 'ポイント': 'point' };
-const SUM_KEYS = ['sales', 'guests', 'groups', 'cash', 'cashless', 'point', 'nomi', 'tanpin', 'event'];
+const SUM_KEYS = ['sales', 'guests', 'groups', 'cash', 'cashless', 'point', 'nomi', 'tanpin', 'event', 'regular'];
 const splitNames = s => String(s || '').split('、').map(x => x.trim()).filter(Boolean);
 const signedYen = d => (d === 0 ? '0円' : (d > 0 ? '+' : '−') + yen(Math.abs(d)));
 const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
@@ -133,7 +133,7 @@ export function renderToday(root, app) {
         h('div', { class: 'drow-time num' }, v.outAt ? fmtHM(v.outAt) : ''),
         h('div', { class: 'drow-main' },
           h('div', { class: 'drow-name' }, `${label(v)}　${v.people}名`),
-          h('div', { class: 'small muted2' }, `${v.kind}` + (unitLabel(v) ? `（${unitLabel(v)}）` : '') + `・${payLabel(v)}`)),
+          h('div', { class: 'small muted2' }, (v.kind === '常連' ? unitLabel(v) : `${v.kind}` + (unitLabel(v) ? `（${unitLabel(v)}）` : '')) + `・${payLabel(v)}`)),
         h('b', { class: 'num' }, yen(total(v))),
         canEdit ? h('button', { class: 'btn btn-xs', onclick: () => undo(v) }, '店内に戻す') : null))
         : h('div', { class: 'muted2 pad' }, 'まだ退店した組はありません'));
@@ -273,7 +273,7 @@ export function renderToday(root, app) {
         closingIsStale(c, sum) ? h('div', { class: 'alert warn', role: 'alert' }, '締めたあとに会計が変わっています（下の数字は締めたときのもの）。') : null,
         row('売上', y(c.sales)), row('組数・来客数', `${Number(c.groups) || 0}組・${Number(c.guests) || 0}名`),
         row('現金・キャッシュレス・ポイント', `${y(c.cash)}・${y(c.cashless)}・${y(c.point)}`),
-        row('飲み放題・単品・イベント', `${y(c.nomi)}・${y(c.tanpin)}・${y(c.event)}`),
+        row('飲み放題・常連・単品・イベント', `${y(c.nomi)}・${y(c.regular)}・${y(c.tanpin)}・${y(c.event)}`),
         h('div', { class: 'lab' }, 'レジの計算'),
         row('開店時のレジの現金', y(c.openCash)),
         row('＋ 現金売上', y(c.cash)),

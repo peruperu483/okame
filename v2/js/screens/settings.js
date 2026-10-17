@@ -75,6 +75,10 @@ function renderForm(root, app) {
       field('運用開始日（完全移行の日）', 'この日より前の営業日の記録は「試運転」として、集計から外します。月の数字は、この日の前日までは管理シートの数字です。早めるときは、ここを変えます。',
         h('input', { class: 'input', type: 'date', value: draft.goLiveDate, oninput: e => { draft.goLiveDate = e.target.value; dirty(); } }))),
 
+    card('入店の料金のボタン',
+      priceListEditor('常連の1人の料金', draft, 'regularPrices', [1500, 2000, 2500], dirty, '入店で「常連」を選んだときのボタン。金額＝1人の料金×人数。ほかの金額は入店のときに手打ちできます。'),
+      priceListEditor('イベントの1人の単価', draft, 'eventUnitPrices', [3000, 4000, 5000], dirty, '入店と予定で、イベントを選んだときのボタン。')),
+
     card('延長', h('p', { class: 'help' }, '料金と時間が決まったら足してください。会計のときに選べるようになります。'),
       extensionsEditor(draft, dirty)),
 
@@ -210,6 +214,27 @@ function listEditor(label, draft, key, dirty) {
   paint();
   return field(label, null, h('div', {}, wrap,
     h('div', { class: 'inline' }, input, h('button', { class: 'btn', onclick: add }, '足す'))));
+}
+
+/** 料金のボタンの金額（円）。小さい順に並べる */
+function priceListEditor(label, draft, key, fallback, dirty, help) {
+  if (!Array.isArray(draft[key])) draft[key] = fallback.slice();
+  const wrap = h('div', { class: 'chips' });
+  const input = h('input', { class: 'input num', type: 'number', inputmode: 'numeric', placeholder: '足す金額（円）' });
+  const paint = () => wrap.replaceChildren(...draft[key].map((v, i) =>
+    h('span', { class: 'chip' }, yen(v),
+      h('button', { class: 'chip-x', 'aria-label': yen(v) + 'を消す', onclick: () => { draft[key].splice(i, 1); paint(); dirty(); } }, '×'))));
+  const add = () => {
+    const v = Number(input.value);
+    if (!Number.isInteger(v) || v <= 0 || draft[key].includes(v)) return;
+    draft[key].push(v);
+    draft[key].sort((a, b) => a - b);
+    input.value = '';
+    paint();
+    dirty();
+  };
+  paint();
+  return field(label, help, h('div', {}, wrap, h('div', { class: 'inline' }, input, h('button', { class: 'btn', onclick: add }, '足す'))));
 }
 
 /** 延長の種類（名前・料金・時間） */

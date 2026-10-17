@@ -85,7 +85,7 @@ test('その日の合計：数えるのは退店した組だけ。店内は見�
   ];
   assert.deepEqual(daySummary(visits, S), {
     sales: 70500, guests: 13, groups: 3, avg: 5423, cash: 59500, cashless: 7000, point: 4000,
-    nomi: 16500, tanpin: 0, event: 54000, inStore: 2, inStorePeople: 3, expected: 7200
+    nomi: 16500, tanpin: 0, event: 54000, regular: 0, inStore: 2, inStorePeople: 3, expected: 7200
   });
   const noPoint = daySummary(visits, { ...S, pointCountsAsSales: false });
   assert.equal(noPoint.sales, 66500);
@@ -212,4 +212,17 @@ test('イベント：金額＝人数×1人の単価。卓の −／＋で人数�
   assert.equal(eventPeople({ ...v, basePeople: 1, extras: [{ id: 'x', type: '人数', delta: -1 }, { id: 'y', type: '人数', delta: -1 }] }), 0);
   assert.equal(isUnitEvent({ kind: 'イベント', base: 54000, people: 6 }), false); // 前の版（合計の金額）
   assert.deepEqual(unitFix({ kind: 'イベント', base: 54000, people: 6 }), {});
+});
+
+test('常連：金額＝1人の料金×人数。時間は飲み放題と同じで延長もできる。明細は「常連 ¥2,000 × 3人」。種類ごとの合計に別に出る', async () => {
+  const { KIND_REGULAR, KINDS, unitLabel, regularUnit, extensionExtra } = await import('../v2/js/calc.js');
+  assert.ok(KINDS.includes(KIND_REGULAR));
+  assert.equal(baseAmount(KIND_REGULAR, 3, S, 2000), 6000);
+  const v = { status: '退店', kind: '常連', people: 3, unitPrice: 2000, base: 6000, inAt, extras: [{ id: 'a', type: '追加', amount: 800 }, { id: 'b', ...extensionExtra({ label: '延長2時間', price: 2000, minutes: 120 }, 2) }], pays: [{ method: '現金', amount: 10800 }] };
+  assert.equal(total(v), 6000 + 800 + 4000);
+  assert.equal(unitLabel(v), '常連 ¥2,000 × 3人');
+  assert.equal(regularUnit({ kind: '常連', people: 3, base: 7500 }), 2500); // 1人の料金が消えていても、基本の金額から
+  assert.equal(timeText(v, timeState(v, S, at('2026-11-01T19:30:00+09:00'))), 'あと210分'); // 19:00入店・19:30に、2時間＋延長2時間の残り
+  const sum = daySummary([v], S);
+  assert.deepEqual([sum.regular, sum.nomi, sum.cash], [10800, 0, 10800]);
 });

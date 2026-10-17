@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.19.0';
+var APP_VERSION = '0.20.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -47,7 +47,7 @@ var TABLES = {
       ['nomi', '飲み放題', 'n'], ['tanpin', '単品', 'n'], ['event', 'イベント', 'n'],
       ['openCash', '開店時の現金', 'n'], ['cashIn', '入金', 'n'], ['cashOut', '出金', 'n'], ['collected', '回収', 'n'],
       ['expectedCash', 'あるはずの現金', 'n'], ['countedCash', '数えた現金', 'n'], ['diff', '差額', 'n'],
-      ['trial', '試運転', 'b']
+      ['trial', '試運転', 'b'], ['regular', '常連', 'n']
     ].concat(COMMON_TAIL)
   },
   // レジの出し入れ。種類は 入金／出金／回収（オーナーがレジから抜いた分）／小口から払う／小口からレジへ。
@@ -161,6 +161,7 @@ var DEFAULT_SETTINGS = {
   shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']],
   pettyCashStart: 0, // 小口現金の最初の残高（わかったら店長が入れる。入れるまでは0から数える）
   eventUnitPrices: [3000, 4000, 5000], // イベントの1人の単価のボタン（予定と入店）
+  regularPrices: [1500, 2000, 2500], // 常連の1人の料金のボタン（入店）。金額＝1人の料金×人数
   mgrIdleMinutes: 10, // 店長モード：何もしないまま、この分数たったらバイトの画面に戻る（画面側で数える。暗証番号の照合と店長の判定はGAS）
   trialStartDate: '2026-10-16' // 試運転を始めた日。この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに出す（集計には入れない）
 };
@@ -194,6 +195,7 @@ var SETTING_LABELS = {
   shiftColumnChoices: '月のタブのシフトのプルダウン（列2・列3・列4の選択肢）',
   pettyCashStart: '小口現金の最初の残高（円）',
   eventUnitPrices: 'イベントの1人の単価のボタン（円）',
+  regularPrices: '常連の1人の料金のボタン（円）',
   mgrIdleMinutes: '店長モードが自動で終わるまでの時間（分。何もしないまま）',
   trialStartDate: '試運転を始めた日（この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに見るためだけに出す）'
 };
@@ -2344,11 +2346,12 @@ function monthlySummary_(month, settings) {
   var s = {
     month: month, legacy: false, sales: 0, guests: 0, groups: 0, cash: 0, cashless: 0, point: 0,
     nomi: 0, tanpin: 0, event: 0, eventGroups: 0, openDays: 0, closedDays: 0, zeroDays: [],
+    regular: 0, regularGroups: 0, regularGuests: 0, // 常連（売上は支払い方法の中にも入っている。分析で別に見るため）
     purchases: { '飲食物': 0, '備品': 0, 'その他': 0 }, otherNotes: [], purchaseTotal: 0,
     fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: 0, count: 0, names: [] }, laborTotal: 0,
     plannedEvents: 0
   };
-  var kindKey = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
+  var kindKey = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event', '常連': 'regular' };
   var openDays = {};
   readTable_(TABLES.visits).rows.forEach(function (v) {
     if (v.status !== '退店' || v.trial === true || !inMonth(v.bizDate)) return;
@@ -2357,6 +2360,7 @@ function monthlySummary_(month, settings) {
     if (v.kind !== 'イベント') { s.cash += n(v.cash); s.cashless += n(v.cashless); s.point += n(v.point); } // イベントは「イベント」の金額で別に数える（管理シートの団体売上と同じ）
     if (kindKey[v.kind]) s[kindKey[v.kind]] += amount;
     if (v.kind === 'イベント') s.eventGroups += 1;
+    if (v.kind === '常連') { s.regularGroups += 1; s.regularGuests += n(v.people); }
     openDays[v.bizDate] = true;
   });
   readTable_(TABLES.closings).rows.forEach(function (c) {
@@ -2433,6 +2437,7 @@ function legacySummary_(month) {
     month: month, legacy: true, sales: get('売上'), guests: get('来客数'), groups: get('組数'),
     cash: get('現金'), cashless: get('キャッシュレス'), point: get('ポイント'),
     nomi: 0, tanpin: 0, event: get('イベント'), eventGroups: get('イベントの組数'), openDays: get('営業日数'),
+    regular: 0, regularGroups: 0, regularGuests: 0,
     closedDays: get('店休日'), zeroDays: text('売上0円の営業日').split('、').filter(String),
     purchases: { '飲食物': get('飲食物'), '備品': get('備品'), 'その他': get('その他') },
     otherNotes: [], fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: get('人件費（その他）'), count: 0, names: [] },
@@ -2475,8 +2480,9 @@ function buildMonthlySheet_() {
   var rows = [
     ['売上', function (s) { return s.sales; }],
     ['　現金', function (s) { return s.cash; }], ['　キャッシュレス', function (s) { return s.cashless; }], ['　ポイント', function (s) { return s.point; }],
-    ['　飲み放題', function (s) { return s.nomi; }], ['　単品', function (s) { return s.tanpin; }], ['　イベント', function (s) { return s.event; }],
+    ['　飲み放題', function (s) { return s.nomi; }], ['　常連', function (s) { return s.regular; }], ['　単品', function (s) { return s.tanpin; }], ['　イベント', function (s) { return s.event; }],
     ['来客数', function (s) { return s.guests; }], ['組数', function (s) { return s.groups; }], ['客単価', function (s) { return s.avgPerGuest; }],
+    ['常連の組数', function (s) { return s.regularGroups; }], ['常連の人数', function (s) { return s.regularGuests; }],
     ['営業日数', function (s) { return s.openDays; }], ['通常営業の1日平均', function (s) { return s.normalDailyAvg; }],
     ['仕入れ', function (s) { return s.purchaseTotal; }],
     ['　飲食物', function (s) { return s.purchases['飲食物']; }], ['　備品', function (s) { return s.purchases['備品']; }],

@@ -89,8 +89,8 @@ export function subHead(title, sub, extra) {
 /**
  * イベントの1人の単価：3,000円・4,000円・5,000円のボタン（設定 eventUnitPrices）と手打ちの欄。el.value() で今の値（未入力は ''）
  */
-export function unitPicker(app, value, onChange) {
-  const opts = (app.settings?.eventUnitPrices || [3000, 4000, 5000]).map(Number);
+export function unitPicker(app, value, onChange, prices) {
+  const opts = (prices || app.settings?.eventUnitPrices || [3000, 4000, 5000]).map(Number); // prices：常連の料金（設定 regularPrices）など
   let cur = value === '' || value == null ? '' : Number(value);
   const el = h('div', { class: 'unit-pick' });
   const inp = h('input', {

@@ -3,7 +3,7 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, timeOnBizDay, addDays } from '../bizday.js';
 import {
-  KIND_NOMI, KIND_TANPIN, KIND_EVENT, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT, EXTRA_PEOPLE,
+  KIND_NOMI, KIND_TANPIN, KIND_EVENT, KIND_REGULAR, REGULAR_PRICES, regularUnit, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT, EXTRA_PEOPLE,
   isUnitEvent, eventPeople, unitFix, unitLabel,
   nextNo, label, baseAmount, extrasTotal, total, paidTotal, remaining, overpaid, methodSums, receive,
   timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel
@@ -20,11 +20,13 @@ export function renderStore(root, app) {
   const S = () => app.settings;
   const day = () => app.bizDate();
   const st = {
-    size: 2, kind: KIND_NOMI, name: '', evUnit: '', evEnd: '', evId: '', err: '',
+    size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evEnd: '', evId: '', err: '',
     pane: 0, all: [], events: [], openId: null, busy: false,
     det: null // 広げた卓の入力（追加の金額・直している追加・支払い方法・受け取る金額・お知らせ）
   };
   const evAmount = () => (Number(st.evUnit) || 0) * st.size; // イベント＝人数×1人の単価
+  const regPrices = () => S().regularPrices || REGULAR_PRICES; // 常連の1人の料金のボタン（設定）
+  const entryAmount = () => baseAmount(st.kind, st.size, S(), st.kind === KIND_EVENT ? evAmount() : st.regUnit);
   const inStore = () => st.all.filter(v => v.status === ST_IN).sort((a, b) => String(a.inAt).localeCompare(String(b.inAt)));
   const editable = () => app.canEdit('visits', day());
 
@@ -32,6 +34,7 @@ export function renderStore(root, app) {
   const sizeGrid = h('div', { class: 'size-grid' });
   const kindGrid = h('div', { class: 'kind-grid' });
   const eventBox = h('div', { class: 'event-box' });
+  const regularBox = h('div', { class: 'event-box' });
   const tanpinNote = h('div', { class: 'note' }, '単品は0円で入店。注文のたびに卓をタップして「追加」で足します。');
   const nameInput = h('input', { id: 'gName', class: 'input', type: 'text', placeholder: '苗字か仮名', maxlength: 20, autocomplete: 'off', oninput: e => { st.name = e.target.value; } });
   const errEl = h('div', { class: 'form-err', role: 'alert' });
@@ -40,7 +43,7 @@ export function renderStore(root, app) {
     h('h2', { class: 'card-title' }, '入店'),
     h('div', { class: 'lab' }, '人数'), sizeGrid,
     h('div', { class: 'lab' }, '種類'), kindGrid,
-    eventBox, tanpinNote,
+    eventBox, regularBox, tanpinNote,
     lab('名前（空でもよい）', 'gName'), nameInput,
     errEl, enterBtn);
 
@@ -52,10 +55,15 @@ export function renderStore(root, app) {
       class: 'btn pick' + (st.kind === k ? ' on' : ''), onclick: () => { st.kind = k; st.err = ''; paintEntry(); }
     }, k)));
     eventBox.hidden = st.kind !== KIND_EVENT;
+    regularBox.hidden = st.kind !== KIND_REGULAR;
     tanpinNote.hidden = st.kind !== KIND_TANPIN;
     if (st.kind === KIND_EVENT) paintEventBox();
+    if (st.kind === KIND_REGULAR) put(regularBox, // 常連：1人の料金のボタン＋手打ち。金額＝1人の料金×人数。時間と延長は飲み放題と同じ
+      h('div', { class: 'lab' }, '1人の料金（金額＝人数×料金）'),
+      unitPicker(app, st.regUnit, u => { st.regUnit = u; st.err = ''; errEl.textContent = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(entryAmount())}）`; }, regPrices()),
+      h('div', { class: 'note' }, `時間は飲み放題と同じ${S().nomiMinutes}分。延長と追加もできます。`));
     errEl.textContent = st.err;
-    enterBtn.textContent = `入店する（${st.size}名・${yen(baseAmount(st.kind, st.size, S(), evAmount()))}）`;
+    enterBtn.textContent = `入店する（${st.size}名・${yen(entryAmount())}）`;
   }
 
   function paintEventBox() {
@@ -70,7 +78,7 @@ export function renderStore(root, app) {
           }
         }, [e.startTime, e.title, e.people ? e.people + '名' : ''].filter(Boolean).join('　')))] : null,
       h('div', { class: 'lab' }, '1人の単価（金額＝人数×単価）'),
-      unitPicker(app, st.evUnit, u => { st.evUnit = u; st.err = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(evAmount())}）`; }),
+      unitPicker(app, st.evUnit, u => { st.evUnit = u; st.err = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(entryAmount())}）`; }),
       lab('終了の予定時刻（イベントごとに違う）', 'evEnd'),
       h('input', { id: 'evEnd', class: 'input', type: 'time', value: st.evEnd, oninput: e => { st.evEnd = e.target.value; st.err = ''; } }));
   }
@@ -91,16 +99,19 @@ export function renderStore(root, app) {
     const isEv = st.kind === KIND_EVENT;
     const endAt = isEv ? timeOnBizDay(day(), st.evEnd, S().bizDayCutoffHour ?? 12) : '';
     if (isEv && (!(Number(st.evUnit) > 0) || !endAt)) { st.err = 'イベントは、1人の単価と終了の予定時刻を入れてください。'; return paintEntry(); }
+    const isReg = st.kind === KIND_REGULAR;
+    if (isReg && !(Number(st.regUnit) > 0)) { st.err = '常連は、1人の料金を選んでください。'; return paintEntry(); }
     st.busy = true;
     setTimeout(() => { st.busy = false; }, 700);
-    const base = baseAmount(st.kind, st.size, S(), evAmount());
+    const base = entryAmount();
     const v = {
       bizDate: day(), no: nextNo(st.all.filter(x => x.bizDate === day())), name: st.name.trim(), people: st.size, kind: st.kind,
       inAt: nowIso(), endAt, status: ST_IN, base, extras: [], pays: [], total: base, cash: 0, cashless: 0, point: 0,
       eventId: isEv ? st.evId : '', trial: app.isTrial(day()),
-      ...(isEv ? { unitPrice: Number(st.evUnit), basePeople: st.size } : {})
+      ...(isEv ? { unitPrice: Number(st.evUnit), basePeople: st.size } : {}),
+      ...(isReg ? { unitPrice: Number(st.regUnit) } : {})
     };
-    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evUnit: '', evEnd: '', evId: '', err: '' });
+    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evEnd: '', evId: '', err: '' });
     nameInput.value = '';
     paintEntry();
     await app.sync.save('visits', uuid(), v);
@@ -150,7 +161,7 @@ export function renderStore(root, app) {
 
   function metaLine(v) {
     const ex = extrasTotal(v);
-    const amt = isUnitEvent(v) ? `${unitLabel(v)}` + (ex > 0 ? ` ＋ 追加 ${yen(ex)}` : '') + ` ＝ ${yen(total(v))}` : yen(total(v)) + (ex > 0 ? `（追加 ${yen(ex)}）` : '');
+    const amt = isUnitEvent(v) || v.kind === KIND_REGULAR ? `${unitLabel(v)}` + (ex > 0 ? ` ＋ 追加 ${yen(ex)}` : '') + ` ＝ ${yen(total(v))}` : yen(total(v)) + (ex > 0 ? `（追加 ${yen(ex)}）` : '');
     const old = v.bizDate !== day() ? `${Number(v.bizDate.slice(5, 7))}/${Number(v.bizDate.slice(8, 10))}の組　·　` : ''; // 前の営業日に残った組
     return old + (v.kind === KIND_EVENT && v.endAt ? `${fmtHM(v.inAt)}〜${fmtHM(v.endAt)}　·　${amt}` : `入店 ${fmtHM(v.inAt)}　·　${amt}`);
   }
@@ -163,7 +174,7 @@ export function renderStore(root, app) {
       'aria-label': `${label(v)} ${v.people}名 ${timeText(v, t)}。タップで追加・会計`
     },
       h('div', { class: 'g-top' },
-        h('span', { class: 'g-name' }, label(v)), h('span', { class: 'kchip' }, v.kind), h('span', { class: 'grow' }),
+        h('span', { class: 'g-name' }, label(v)), h('span', { class: 'kchip' + (v.kind === KIND_REGULAR ? ' k-regular' : '') }, v.kind), h('span', { class: 'grow' }),
         BADGE[t.kind] ? h('span', { class: 'sbadge ' + t.kind }, BADGE[t.kind]) : null),
       h('div', { class: 'g-mid' }, h('span', { class: 'g-time' }, timeText(v, t)), h('span', { class: 'g-people' }, v.people + '名')),
       h('div', { class: 'g-meta' }, metaLine(v)),
@@ -278,7 +289,7 @@ export function renderStore(root, app) {
       h('div', { class: 'inline-add' }, addInput,
         h('button', { class: 'btn btn-primary', onclick: () => addCustom(v) }, d.editId ? '直す' : '足す')),
       d.editId ? h('button', { class: 'btn btn-sm', onclick: () => { d.editId = null; d.addAmt = ''; paintDetail(); } }, '直すのをやめる') : null,
-      exts.length && v.kind === KIND_NOMI ? [h('div', { class: 'lab' }, '延長'),
+      exts.length && (v.kind === KIND_NOMI || v.kind === KIND_REGULAR) ? [h('div', { class: 'lab' }, '延長'),
         h('div', { class: 'quick' }, exts.map(x => h('button', { class: 'btn', onclick: () => pickExtension(v, null, x) }, `${x.label}（1人 ${yen(x.price)}）`)))] : null);
 
     // --- 会計 ---
@@ -307,7 +318,7 @@ export function renderStore(root, app) {
 
     put(panel,
       h('div', { class: 'det-head' },
-        h('span', { class: 'det-name' }, label(v)), h('span', { class: 'kchip' }, v.kind),
+        h('span', { class: 'det-name' }, label(v)), h('span', { class: 'kchip' + (v.kind === KIND_REGULAR ? ' k-regular' : '') }, v.kind),
         BADGE[t.kind] ? h('span', { class: 'sbadge ' + t.kind }, BADGE[t.kind]) : null,
         h('span', { class: 'grow' }),
         h('button', { class: 'btn btn-sm', onclick: () => editGroup(v) }, '直す'),
@@ -423,12 +434,15 @@ export function renderStore(root, app) {
     const unitEv = isUnitEvent(v);
     const evAmt = h('input', { class: 'input', type: 'number', inputmode: 'numeric', value: String(v.base ?? '') });
     const unit = unitEv ? unitPicker(app, v.unitPrice) : null;
+    const isReg = v.kind === KIND_REGULAR;
+    const regUnit = isReg ? unitPicker(app, regularUnit(v), null, regPrices()) : null;
     const evEnd = h('input', { class: 'input', type: 'time', value: v.endAt ? fmtHM(v.endAt) : '' });
     openSheet(close => [
       h('h2', {}, `${label(v)}を直す`),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '名前'), name),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '人数'), people,
         v.kind === KIND_NOMI ? h('p', { class: 'help' }, `飲み放題は、人数×${yen(S().nomiPrice)} に基本の金額も直します。`) : null),
+      isReg ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の料金（金額＝人数×料金）'), regUnit) : null,
       isEv ? [unitEv ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の単価（金額＝人数×単価）'), unit)
         : h('div', { class: 'field' }, h('div', { class: 'field-label' }, '金額（団体の合計）'), evAmt),
         h('div', { class: 'field' }, h('div', { class: 'field-label' }, '終了の予定時刻'), evEnd)] : null,
@@ -448,6 +462,11 @@ export function renderStore(root, app) {
           class: 'btn btn-primary', onclick: async () => {
             const patch = { name: name.value.trim(), people: people.value() };
             if (v.kind === KIND_NOMI) patch.base = baseAmount(KIND_NOMI, patch.people, S());
+            if (isReg) {
+              const u = Number(regUnit.value());
+              if (!(u > 0)) { toast('1人の料金を入れてください', 'err'); return; }
+              Object.assign(patch, { unitPrice: u, base: baseAmount(KIND_REGULAR, patch.people, S(), u) });
+            }
             if (isEv) {
               const endAt = timeOnBizDay(v.bizDate, evEnd.value, S().bizDayCutoffHour ?? 12);
               if (unitEv) {

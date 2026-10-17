@@ -269,7 +269,7 @@ button { cursor: pointer; }
 .entry .card-title { margin: 0; }
 .size-grid { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 8px; }
 .size-grid .btn { min-height: 54px; font-size: 20px; padding: 0; }
-.kind-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.kind-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .kind-grid .btn { padding: 0; }
 .event-box { display: flex; flex-direction: column; gap: 8px; }
 .btn.pick.left { justify-content: flex-start; padding: 0 12px; font-size: 15px; }
@@ -302,6 +302,7 @@ button { cursor: pointer; }
 .g-top { display: flex; align-items: center; gap: 8px; width: 100%; }
 .g-name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kchip { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 999px; color: var(--ink2); background: var(--bg); white-space: nowrap; }
+.kchip.k-regular { background: #FCE9D4; border-color: #E6B98A; color: #7A3E08; font-weight: 700; } /* 常連の卓 */
 .sbadge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
 .sbadge.lo { color: var(--warn); background: var(--lo-badge); }
 .sbadge.over { color: #fff; background: var(--over); }

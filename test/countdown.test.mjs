@@ -237,3 +237,16 @@ test('古い形のタブを作り直しても、タブの並び（11月（アプ
   const names = env.sheets.map(s => s.name).filter(n => n.startsWith('11月'));
   assert.deepEqual(names, ['11月（アプリ）', '11月（手打ち）']);
 });
+
+test('月次：常連の組数・人数・売上を別に出す（売上は支払い方法の中にも入る）', () => {
+  const env = boot('2026-11-05T20:00:00+09:00');
+  const mgrToken = env.login();
+  env.sync(mgrToken, [
+    ['visits', 'r1', { bizDate: '2026-11-02', no: 1, people: 3, kind: '常連', status: '退店', unitPrice: 2000, base: 6000, total: 6800, cash: 6800 }],
+    ['visits', 'r2', { bizDate: '2026-11-03', no: 1, people: 2, kind: '常連', status: '退店', unitPrice: 1500, base: 3000, total: 3000, cashless: 3000 }],
+    ['visits', 'n1', { bizDate: '2026-11-03', no: 2, people: 2, kind: '飲み放題', status: '退店', total: 6000, cash: 6000 }]
+  ]);
+  const s = env.call('monthly', { mgrToken, month: '2026-11' }).summary;
+  assert.deepEqual([s.regular, s.regularGroups, s.regularGuests, s.nomi, s.sales, s.cash, s.cashless], [9800, 2, 5, 6000, 15800, 12800, 3000]);
+  assert.deepEqual(env.call('bootstrap').settings.regularPrices, [1500, 2000, 2500]);
+});

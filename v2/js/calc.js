@@ -12,7 +12,9 @@
 export const KIND_NOMI = '飲み放題';
 export const KIND_TANPIN = '単品';
 export const KIND_EVENT = 'イベント';
-export const KINDS = [KIND_NOMI, KIND_TANPIN, KIND_EVENT];
+export const KIND_REGULAR = '常連'; // 1人の料金（設定 regularPrices）×人数。時間と延長は飲み放題と同じ。売上は支払い方法で数える
+export const KINDS = [KIND_NOMI, KIND_REGULAR, KIND_TANPIN, KIND_EVENT];
+export const REGULAR_PRICES = [1500, 2000, 2500]; // 設定がないとき（古いGAS）の常連の料金のボタン
 export const METHODS = ['現金', 'キャッシュレス', 'ポイント'];
 export const ST_IN = '店内';
 export const ST_OUT = '退店';
@@ -63,13 +65,22 @@ export function unitFix(v) {
   const people = eventPeople(v);
   return { people, base: people * n(v.unitPrice) };
 }
-/** 「¥5,000 × 22人」 */
-export const unitLabel = v => (isUnitEvent(v) ? `${yen(v.unitPrice)} × ${eventPeople(v)}人` : '');
+/** 常連の1人の料金。前の版のGAS（1人の単価の列がない）で消えていたら、基本の金額÷人数 */
+export function regularUnit(v) {
+  if (n(v.unitPrice) > 0) return n(v.unitPrice);
+  return n(v.people) ? Math.round(n(v.base) / n(v.people)) : 0;
+}
+/** 明細の「¥5,000 × 22人」（イベント）・「常連 ¥2,000 × 3人」 */
+export function unitLabel(v) {
+  if (v.kind === KIND_REGULAR) return `常連 ${yen(regularUnit(v))} × ${n(v.people)}人`;
+  return isUnitEvent(v) ? `${yen(v.unitPrice)} × ${eventPeople(v)}人` : '';
+}
 
-/** 入店のときの基本の金額。飲み放題＝人数×料金、イベント＝団体の合計（人数×単価）、単品＝0円 */
-export function baseAmount(kind, people, s, eventAmount = 0) {
+/** 入店のときの基本の金額。飲み放題＝人数×料金、イベント＝団体の合計（人数×単価。amount に合計）、常連＝人数×1人の料金（amount に1人の料金）、単品＝0円 */
+export function baseAmount(kind, people, s, amount = 0) {
   if (kind === KIND_NOMI) return n(people) * n(s.nomiPrice);
-  if (kind === KIND_EVENT) return n(eventAmount);
+  if (kind === KIND_REGULAR) return n(people) * n(amount);
+  if (kind === KIND_EVENT) return n(amount);
   return 0;
 }
 
@@ -181,7 +192,7 @@ export function daySummary(visits, s) {
   return {
     sales, guests, groups: done.length, avg: guests ? Math.round(sales / guests) : 0,
     ...ms,
-    nomi: byKind(KIND_NOMI), tanpin: byKind(KIND_TANPIN), event: byKind(KIND_EVENT),
+    nomi: byKind(KIND_NOMI), tanpin: byKind(KIND_TANPIN), event: byKind(KIND_EVENT), regular: byKind(KIND_REGULAR),
     inStore: inStore.length, inStorePeople: sum(inStore, v => n(v.people)), expected: sum(inStore, total)
   };
 }

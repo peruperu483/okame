@@ -138,11 +138,12 @@ export function renderKintai(root, app) {
           h('div', { class: 'rec-row' + (st.editId === r.id ? ' editing' : '') },
             h('span', { class: 'rec-date' }, fmtMD(r.bizDate)),
             h('b', { class: 'rec-name' }, r.name),
-            h('span', { class: 'rec-detail small' }, r.kind === ATT_OTHER ? '手打ち' : fmtHours(r.hours) + (Number(r.transport) ? '＋交通費' : '')),
+            h('span', { class: 'rec-detail small' }, String(r.id).startsWith('cm-') ? 'レジ・小口から' : r.kind === ATT_OTHER ? '手打ち' : fmtHours(r.hours) + (Number(r.transport) ? '＋交通費' : '')),
             h('b', { class: 'num grow' }, yen(attendanceCost(r))),
             r.edited ? h('span', { class: 'badge' }, '修正あり') : null,
-            h('button', { class: 'btn btn-xs', onclick: () => edit(r) }, '直す'),
-            h('button', { class: 'btn btn-xs danger', onclick: () => remove(r) }, '消す')))
+            String(r.id).startsWith('cm-') ? h('span', { class: 'small muted2 rec-hint' }, '今日の画面で直す') : [ // レジの出し入れの内訳（スタッフへの支払い）から自動で入った分
+              h('button', { class: 'btn btn-xs', onclick: () => edit(r) }, '直す'),
+              h('button', { class: 'btn btn-xs danger', onclick: () => remove(r) }, '消す')]))
           : h('div', { class: 'muted2 pad' }, 'この月の記録はまだありません。'),
         h('div', { class: 'small muted2' }, '直した・消した記録は、修正前の内容と一緒に操作履歴に残ります。')));
   }

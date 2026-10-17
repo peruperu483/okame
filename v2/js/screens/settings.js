@@ -95,16 +95,19 @@ function renderForm(root, app) {
             } }),
           h('span', {}, label)))))),
 
-    card('レジの回収',
+    card('レジの回収と小口現金',
       swOnOff('バイトも、オーナーの回収を入れられる', () => draft.staffCanCollect !== false, x => { draft.staffCanCollect = x; },
         'オーナーがレジから抜いた分（仕入れ・支出には入りません）。いいえにすると、店長だけが入れられます。'),
+      num('小口現金の最初の残高', () => draft.pettyCashStart, x => { draft.pettyCashStart = x; }, '円',
+        'アプリで小口を使い始める前に、小口にあった金額。わかったら入れてください（入れるまでは0から数えます）。レジの現金・月次には混ぜません。'),
       ),
 
     card('バイトに見せる範囲',
       h('p', { class: 'help' }, '今日・店内・予定はいつも見せます。分析とその他（勤怠・仕入れ・固定費・設定）は店長だけです。'),
       h('div', { class: 'vis' },
         sw('予定の幹事の連絡先', () => v.eventContact, x => { v.eventContact = x; }),
-        sw('月の売上目標までの「あと」（今日の画面）', () => v.countdown !== false, x => { v.countdown = x; }))),
+        sw('月の売上目標までの「あと」（今日の画面）', () => v.countdown !== false, x => { v.countdown = x; }),
+        sw('過ぎた日の締めと会計（今日の画面の「過ぎた日を見る」）', () => v.pastDays !== false, x => { v.pastDays = x; }))),
 
     card('目標',
       num('月の売上（月ごとの目標がない月に使う）', () => tg.monthlySales, x => { tg.monthlySales = x; }, '円'),

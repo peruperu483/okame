@@ -1,7 +1,7 @@
 // 通信が切れてもアプリを開けるように、画面のファイルを端末に置いておく。
 // 画面のファイルを変えたら VERSION を上げる（上げないと古い画面が出続ける）。
 // GAS（script.google.com）への通信はここでは扱わない。
-const VERSION = 'v0.14.0';
+const VERSION = 'v0.15.0';
 const CACHE = 'okame-' + VERSION;
 const FILES = [
   './', './index.html', './config.js', './manifest.webmanifest', './css/app.css',
@@ -9,7 +9,7 @@ const FILES = [
   './js/calc.js', './js/ui.js',
   './js/screens/settings.js', './js/screens/pin.js', './js/screens/more.js', './js/screens/common.js',
   './js/screens/store.js', './js/screens/today.js', './js/screens/plan.js', './js/screens/ana.js',
-  './js/screens/kintai.js', './js/screens/shiire.js', './js/screens/kotei.js',
+  './js/screens/kintai.js', './js/screens/shiire.js', './js/screens/kotei.js', './js/screens/cashout.js',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'
 ];
 

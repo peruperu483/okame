@@ -3,11 +3,14 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, addDays } from '../bizday.js';
 import {
-  KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT,
-  label, payLabel, total, methodSums, livePays, markAllDeleted, daySummary, pct, registerCalc, moveLabel, validateMove, closingIsStale
+  KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT, MOVE_PETTY_PAY,
+  label, payLabel, total, methodSums, livePays, markAllDeleted, daySummary, pct, registerCalc, registerEffect, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
 import { pickReason } from '../ui.js';
 import { fmtMD, mountCountdown } from './common.js';
+import { canUseLines, cashOutEditor, saveCashOut, editCashOut, pettyCard } from './cashout.js';
+
+const PETTY_FROM = '2026-10-01'; // 小口現金の残高を数えるために読む範囲の始め
 
 const KIND_KEY = { '飲み放題': 'nomi', '単品': 'tanpin', 'イベント': 'event' };
 const METHOD_KEY = { '現金': 'cash', 'キャッシュレス': 'cashless', 'ポイント': 'point' };
@@ -24,7 +27,7 @@ export function renderToday(root, app) {
   const st = {
     visits: [], moves: [], closings: [], dayRow: null, staff: [],
     date: null, stale: [], membersKey: null,
-    regForm: null, rOutKind: '買い出し', rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
+    regForm: null, co: null, allMoves: [], rOutKind: '買い出し', rAmt: '', rCat: '飲食物', rNote: '', rReason: 'オーナーの補充', rDate: '', rMsg: '', rBad: false,
     counted: '', members: null, closeMsg: ''
   };
 
@@ -35,10 +38,11 @@ export function renderToday(root, app) {
   const staffBox = h('section', { class: 'dcard' });
   const cd = mountCountdown(app, realDay().slice(0, 7));
   const regBox = h('section', { class: 'dcard' });
+  const pettyBox = h('section', { class: 'dcard' });
   const closeBox = h('section', { class: 'dcard' });
   root.append(h('section', { class: 'page dash' },
     staleBox, top, cd.el, breakdown,
-    h('div', { class: 'dash-bottom' }, h('div', { class: 'dash-side' }, staffBox, doneBox), h('div', { class: 'dash-side' }, regBox, closeBox))));
+    h('div', { class: 'dash-bottom' }, h('div', { class: 'dash-side' }, staffBox, doneBox), h('div', { class: 'dash-side' }, regBox, pettyBox, closeBox))));
 
   // ===== 上の3枚 =====
   function paintTop(sum) {
@@ -135,24 +139,43 @@ export function renderToday(root, app) {
   function paintRegister() {
     const mgr = app.auth.isMgr();
     const canEdit = app.canEdit('cashMoves', day());
-    const today = st.moves.filter(m => m.bizDate === day() && m.status !== ST_DEL).sort((a, b) => String(b.at).localeCompare(String(a.at)));
-    const carried = registerCalc({ day: day(), closings: st.closings, moves: st.moves, dayRow: st.dayRow, cashSales: 0 }).carried || [];
+    const lines = canUseLines(app); // GASが内訳を受け取れる版になってから、出金を「出した額 → 内訳」にする
+    const onReg = m => m.type !== MOVE_PETTY_PAY; // 小口から払った分はレジの現金が変わらないので、小口の欄にだけ出す
+    const today = st.moves.filter(m => m.bizDate === day() && m.status !== ST_DEL && onReg(m)).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const carried = (registerCalc({ day: day(), closings: st.closings, moves: st.moves, dayRow: st.dayRow, cashSales: 0 }).carried || []).filter(onReg);
+    const outLabel = lines ? '内訳を入れて出す' : '買い出し';
+    const outPick = () => pickBtns([outLabel, 'オーナーが回収'], st.rOutKind === 'オーナーが回収' ? 'オーナーが回収' : outLabel, k => { st.rOutKind = k === 'オーナーが回収' ? k : '買い出し'; paintRegister(); });
+    const signedMove = m => { const e = registerEffect(m); return h('b', { class: 'num ' + (e >= 0 ? 'pos' : 'neg') }, (e >= 0 ? '＋' : '−') + yen(Math.abs(e))); };
+    const fixBtn = m => (lines && mgr && m.type === MOVE_OUT ? h('button', { class: 'btn btn-xs', onclick: () => editCashOut(app, m) }, '内訳を直す') : null);
     const canCollect = mgr || S().staffCanCollect !== false; // バイトが回収を入れられるかは設定
     const pickBtns = (opts, cur, onPick) => opts.map(o => h('button', { class: 'btn pick' + (cur === o ? ' on' : ''), onclick: () => onPick(o) }, o));
     const amtInput = h('input', { class: 'input', type: 'number', inputmode: 'numeric', placeholder: '金額', value: st.rAmt, 'aria-label': st.regForm === 'out' ? '出す金額' : '入れる金額', oninput: e => { st.rAmt = e.target.value; } });
     let form = null;
     if (st.regForm === 'out' && st.rOutKind === 'オーナーが回収' && canCollect) {
       form = h('div', { class: 'subform' },
-        h('div', { class: 'grid2' }, pickBtns(['買い出し', 'オーナーが回収'], st.rOutKind, k => { st.rOutKind = k; paintRegister(); })),
+        outPick(),
         h('div', { class: 'small' }, 'オーナーがレジから抜いた分。仕入れ・支出には入りません（レジの「あるはずの現金」からだけ引きます）'),
         amtInput,
         h('input', { class: 'input', type: 'text', placeholder: 'メモ（なくてもよい）', value: st.rNote, 'aria-label': 'メモ', oninput: e => { st.rNote = e.target.value; } }),
         mgr ? [h('label', { class: 'lab' }, '日付（閉店後や休みの日の回収。店長だけ）'),
           h('input', { class: 'input', type: 'date', max: day(), value: st.rDate || day(), oninput: e => { st.rDate = e.target.value; } })] : null,
         h('button', { class: 'btn btn-primary', onclick: () => saveMove(MOVE_COLLECT) }, '回収を記録'));
+    } else if (st.regForm === 'out' && lines) {
+      if (!st.co) {
+        st.co = cashOutEditor(app, {
+          onDone: async r => {
+            Object.assign(st, { regForm: null, co: null, rBad: false, rMsg: `レジから ${yen(r.amount)} を出しました（内訳：${r.lines.length}行）` });
+            await saveCashOut(app, day(), r);
+          }
+        });
+      }
+      form = h('div', { class: 'subform' },
+        canCollect ? h('div', { class: 'grid2' }, outPick()) : null,
+        h('div', { class: 'small' }, '出した額を入れて、何に使ったかを1行ずつ足します。仕入れは仕入れに、スタッフへの支払いは人件費に入ります。レジに戻した分はレジから減りません'),
+        st.co.el);
     } else if (st.regForm === 'out') {
       form = h('div', { class: 'subform' },
-        canCollect ? h('div', { class: 'grid2' }, pickBtns(['買い出し', 'オーナーが回収'], st.rOutKind, k => { st.rOutKind = k; paintRegister(); })) : null,
+        canCollect ? h('div', { class: 'grid2' }, outPick()) : null,
         h('div', { class: 'small' }, '買い出しなど。仕入れにも「レジから」として自動で入ります'),
         amtInput,
         h('div', { class: 'grid3' }, pickBtns(S().purchaseCategories || ['飲食物', '備品', 'その他'], st.rCat, c => { st.rCat = c; paintRegister(); })),
@@ -177,17 +200,19 @@ export function renderToday(root, app) {
       carried.map(m => h('div', { class: 'mrow' },
         h('span', { class: 'num muted2 mtime' }, fmtMD(m.bizDate).slice(0, -3)),
         h('span', { class: 'grow' }, moveLabel(m)),
-        h('b', { class: 'num ' + (m.type === MOVE_IN ? 'pos' : 'neg') }, (m.type === MOVE_IN ? '＋' : '−') + yen(m.amount)),
+        signedMove(m), fixBtn(m),
         app.canEdit('cashMoves', m.bizDate) ? h('button', { class: 'btn btn-xs danger', onclick: () => delMove(m) }, '消す') : null)),
       today.map(m => h('div', { class: 'mrow' },
         h('span', { class: 'num muted2 mtime' }, fmtHM(m.at)),
         h('span', { class: 'grow' }, moveLabel(m)),
-        h('b', { class: 'num ' + (m.type === MOVE_IN ? 'pos' : 'neg') }, (m.type === MOVE_IN ? '＋' : '−') + yen(m.amount)),
+        signedMove(m), fixBtn(m),
         canEdit && (m.type !== MOVE_COLLECT || canCollect) ? h('button', { class: 'btn btn-xs danger', onclick: () => delMove(m) }, '消す') : null)));
+    if (lines) put(pettyBox, pettyCard(app, { moves: st.allMoves, day: day(), canEdit }));
+    pettyBox.hidden = !lines;
   }
 
   function toggleForm(f) {
-    Object.assign(st, { regForm: st.regForm === f ? null : f, rOutKind: '買い出し', rAmt: '', rNote: '', rDate: '', rMsg: '' });
+    Object.assign(st, { regForm: st.regForm === f ? null : f, co: null, rOutKind: '買い出し', rAmt: '', rNote: '', rDate: '', rMsg: '' });
     paintRegister();
   }
 
@@ -253,8 +278,8 @@ export function renderToday(root, app) {
       row('開店時のレジの現金' + (reg.openFrom === 'carry' ? '（前日から引き継ぎ）' : reg.openFrom === 'manual' ? '（手で入れた金額）' : ''), reg.openCash == null ? '—' : yen(reg.openCash)),
       mgr && reg.openFrom !== 'none' && !st.editOpen ? h('button', { class: 'linkbtn', onclick: () => { st.editOpen = true; paintAll(); } }, '開店時の現金を直す') : null,
       row('＋ 今日の現金売上', yen(sum.cash)),
-      row('＋ 入金', yen(reg.cashIn)),
-      row('− 出金（買い出し）', yen(reg.cashOut)),
+      row('＋ 入金' + (canUseLines(app) ? '（小口から戻した分も）' : ''), yen(reg.cashIn)),
+      row(canUseLines(app) ? '− 出金（出した額 − レジに戻した分）' : '− 出金（買い出し）', yen(reg.cashOut)),
       row('− 回収（オーナーが抜いた分）', yen(reg.collected)),
       row('＝ あるはずの現金', yen(reg.expected), true),
       h('label', { class: 'lab', for: 'regCash' }, 'レジの現金（数えた金額）'),
@@ -321,7 +346,8 @@ export function renderToday(root, app) {
     const real = realDay();
     const recent = await app.store.listRows('visits', addDays(real, -3), real); // 前の営業日の未締めに気づくため、3日前から読む
     st.visits = recent.filter(v => v.bizDate === day());
-    st.moves = await app.store.listRows('cashMoves', from(), real);
+    st.allMoves = await app.store.listRows('cashMoves', PETTY_FROM, real); // 小口現金の残高は全期間で数える
+    st.moves = st.allMoves.filter(m => m.bizDate >= from());
     st.closings = await app.store.listRows('closings', from(), real);
     st.stale = [];
     for (let k = 1; k <= 3; k++) {
@@ -353,5 +379,6 @@ export function renderToday(root, app) {
   cd.refresh();
   load();
   pullAll();
+  app.sync.pull('cashMoves', PETTY_FROM, realDay()).catch(() => {}); // 小口現金の残高のため、前の分も1回だけ読む
   return () => { offChange(); clearInterval(timer); clearInterval(cdTimer); cd.destroy(); document.removeEventListener('visibilitychange', onVisible); };
 }

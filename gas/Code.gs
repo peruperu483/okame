@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.17.0';
+var APP_VERSION = '0.18.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -49,14 +49,16 @@ var TABLES = {
       ['trial', '試運転', 'b']
     ].concat(COMMON_TAIL)
   },
-  // レジの出し入れ。種類は 入金／出金（買い出し）／回収（オーナーがレジから抜いた分）。
-  // 出金はGASが仕入れにも「レジから」として自動で記録する（消すと仕入れも消す）。入金と回収は仕入れに入れない
+  // レジの出し入れ。種類は 入金／出金／回収（オーナーがレジから抜いた分）／小口から払う／小口からレジへ。
+  // 出金は「出した額（金額）→ 内訳」（仕入れ・スタッフ・小口・戻す）。前の版の出金（内訳なし）は全額が仕入れ。
+  // GASが、内訳の仕入れを仕入れ（レジから／小口から）に、スタッフへの支払いを勤怠（手打ち）に写す（消すと写した行も消す）
+  // 小口現金の残高 ＝ 設定 pettyCashStart ＋ 出金の内訳の「小口」− 小口から払う − 小口からレジへ（画面の calc.js で数える）
   cashMoves: {
     sheet: 'レジの出し入れ', read: 'open', write: 'staff', dateKey: 'bizDate',
     cols: [
       ['id', 'ID', 't'], ['bizDate', '営業日', 't'], ['at', '日時', 't'], ['type', '入金・出金', 't'],
       ['amount', '金額', 'n'], ['category', '科目', 't'], ['note', '内容', 't'], ['reason', '入金の理由', 't'],
-      ['purchaseId', '仕入れID', 't'], ['status', '状態', 't']
+      ['purchaseId', '仕入れID', 't'], ['status', '状態', 't'], ['lines', '内訳', 'j']
     ].concat(COMMON_TAIL)
   },
   days: {
@@ -147,7 +149,7 @@ var DEFAULT_SETTINGS = {
   staffCanCollect: true, // バイトも、オーナーの回収（レジから抜いた分）を入れられる
   fixedCostItems: ['家賃電気', 'ガス・カラオケ・Wi-Fi・電話', '保険'],
   eventTypes: ['団体', '日本酒の会', '貸切'],
-  visibility: { eventContact: true, countdown: true }, // countdown：月の売上のカウンター（あと いくら）をバイトに見せる
+  visibility: { eventContact: true, countdown: true, pastDays: true }, // countdown：月の売上のカウンター（あと いくら）をバイトに見せる。pastDays：過ぎた日の締めと会計を見せる
   // days=0 はその営業日だけ。1なら前日まで。未来の日付（予定・希望休）はいつでも
   staffEdit: { days: 0, tables: ['visits', 'closings', 'days', 'cashMoves', 'events', 'requests'] },
   targets: { monthlySales: 1000000, dailyGuests: 10, monthlyEvents: 0 },
@@ -155,7 +157,8 @@ var DEFAULT_SETTINGS = {
   managerName: '岡本', // 店長の名前。シフトの選び方（アプリの予定・閉店・スプシの月のタブ）に出る
   monthlyTargets: {}, // 月ごとの売上目標（'2026-11': 1200000 の形）。ない月は targets.monthlySales
   // 月のタブのシフトのプルダウン：列2・列3・列4の選択肢。列5は、店長とスタッフと「店休日」
-  shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']]
+  shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']],
+  pettyCashStart: 0 // 小口現金の最初の残高（わかったら店長が入れる。入れるまでは0から数える）
 };
 
 var SETTING_LABELS = {
@@ -184,7 +187,8 @@ var SETTING_LABELS = {
   managerFee: '店長報酬（月額・円。店長だけが見られる）',
   managerName: '店長の名前（シフトの選び方に出る）',
   monthlyTargets: '月ごとの売上目標（月 → 円）',
-  shiftColumnChoices: '月のタブのシフトのプルダウン（列2・列3・列4の選択肢）'
+  shiftColumnChoices: '月のタブのシフトのプルダウン（列2・列3・列4の選択肢）',
+  pettyCashStart: '小口現金の最初の残高（円）'
 };
 
 var MGR_TTL_SEC = 2 * 60 * 60;
@@ -505,29 +509,68 @@ function applyOps_(ops, ctx) {
 }
 
 /**
- * レジからの出金（買い出し）を仕入れにも写す。回収（オーナーが抜いた分）と入金は写さない（仕入れのID＝'cm-'＋出し入れのID。何度写しても1件）。
- * 出金を消したら（または入金に変えたら）仕入れも「削除」にする。バイトの出金でも写せるように、ここは店長の権限で書く
+ * レジの出し入れを、仕入れ・勤怠（人件費）に写す。バイトの出金でも写せるように、ここは店長の権限で書く（何度写しても同じ行）
+ * - 前の版の出金（内訳なし）：全額を仕入れ 'cm-'＋出し入れのID（支払い元「レジから」）
+ * - 内訳のある出金・小口から払う：内訳の仕入れ → 仕入れ、スタッフへの支払い → 勤怠（手打ち。月のタブは「スタッフ」の列）。
+ *   ID は 'cm-'＋出し入れのID＋'-'＋内訳の行のID。支払い元は「レジから」／「小口から」。小口へ・レジに戻すは写さない
+ * - 出し入れを消した・内訳から外した・入金に変えたときは、写した行を「削除」にする
  */
 function syncPurchasesFromMoves_(ids, ctx) {
   if (!ids.length) return;
   var moves = readTable_(TABLES.cashMoves).rows.filter(function (m) { return ids.indexOf(m.id) >= 0; });
-  var existing = {};
-  readTable_(TABLES.purchases).rows.forEach(function (p) { existing[p.id] = true; });
-  var ops = [];
+  var purchases = readTable_(TABLES.purchases).rows, attendance = readTable_(TABLES.attendance).rows;
+  var pOps = [], aOps = [];
   moves.forEach(function (m) {
-    var pid = 'cm-' + m.id;
-    var isOut = m.type === '出金' && m.status !== '削除';
-    if (!isOut && !existing[pid]) return;
-    ops.push({
-      opId: 'sys-' + pid, id: pid, data: {
-        date: m.bizDate, category: m.category, note: m.category === 'その他' ? m.note : '',
-        label: purchaseLabel_(m.category, m.note), shop: '', amount: m.amount,
-        paidFrom: 'レジから', moveId: m.id, source: 'レジの出し入れ', status: isOut ? '有効' : '削除',
-        createdAt: m.createdAt, updatedAt: m.updatedAt, deviceId: m.deviceId
-      }
+    var want = moveCopies_(m);
+    var prefix = 'cm-' + m.id;
+    var mine = function (id) { id = String(id); return id === prefix || id.indexOf(prefix + '-') === 0; };
+    var stamp = { createdAt: m.createdAt, updatedAt: m.updatedAt, deviceId: m.deviceId };
+    Object.keys(want.purchases).forEach(function (id) { pOps.push({ opId: 'sys-' + id, id: id, data: Object.assign(want.purchases[id], stamp) }); });
+    Object.keys(want.attendance).forEach(function (id) { aOps.push({ opId: 'sys-' + id, id: id, data: Object.assign(want.attendance[id], stamp) }); });
+    purchases.forEach(function (p) {
+      if (mine(p.id) && !want.purchases[p.id] && p.status !== '削除') pOps.push({ opId: 'sys-del-' + p.id, id: p.id, data: { status: '削除', updatedAt: laterStamp_(m.updatedAt, p.updatedAt) } });
+    });
+    attendance.forEach(function (a) {
+      if (mine(a.id) && !want.attendance[a.id] && a.status !== '削除') aOps.push({ opId: 'sys-del-' + a.id, id: a.id, data: { status: '削除', updatedAt: laterStamp_(m.updatedAt, a.updatedAt) } });
     });
   });
-  if (ops.length) upsert_('purchases', ops, { mgr: true, settings: ctx.settings, deviceId: ctx.deviceId });
+  var sys = { mgr: true, settings: ctx.settings, deviceId: ctx.deviceId };
+  if (pOps.length) upsert_('purchases', pOps, sys);
+  if (aOps.length) upsert_('attendance', aOps, sys);
+}
+
+/** 1つの出し入れから写す行（仕入れ・勤怠）。ID → 中身 */
+function moveCopies_(m) {
+  var out = { purchases: {}, attendance: {} };
+  if (m.status === '削除' || (m.type !== '出金' && m.type !== '小口から払う')) return out;
+  var from = m.type === '小口から払う' ? '小口から' : 'レジから';
+  if (!Array.isArray(m.lines)) { // 前の版の出金（内訳なし）
+    if (m.type !== '出金') return out;
+    out.purchases['cm-' + m.id] = {
+      date: m.bizDate, category: m.category, note: m.category === 'その他' ? m.note : '',
+      label: purchaseLabel_(m.category, m.note), shop: '', amount: m.amount,
+      paidFrom: from, moveId: m.id, source: 'レジの出し入れ', status: '有効'
+    };
+    return out;
+  }
+  m.lines.forEach(function (l) {
+    if (!l || l.del || !l.id || !(Number(l.amount) > 0)) return;
+    var id = 'cm-' + m.id + '-' + l.id;
+    if (l.kind === '仕入れ') {
+      out.purchases[id] = {
+        date: m.bizDate, category: l.category, note: l.note || '',
+        label: l.category === 'その他' ? purchaseLabel_(l.category, l.note) : String(l.category || '') + (l.note ? '（' + l.note + '）' : ''),
+        shop: '', amount: Number(l.amount), paidFrom: from, moveId: m.id, source: 'レジの出し入れ', status: '有効'
+      };
+    } else if (l.kind === 'スタッフ') {
+      var amt = Number(l.amount);
+      out.attendance[id] = {
+        bizDate: m.bizDate, staffId: '', name: String(l.name || ''), kind: '手打ち', hours: '', wage: '', transport: '',
+        amount: amt, cost: amt, status: '有効', edited: false
+      };
+    }
+  });
+  return out;
 }
 
 /** 科目の表示。その他は「その他（花）」 */
@@ -538,6 +581,10 @@ function purchaseLabel_(category, note) {
 function upsert_(tableKey, ops, ctx) {
   var def = TABLES[tableKey];
   var t = readTable_(def);
+  if (def.cols.some(function (c) { return t.header.indexOf(c[1]) < 0; })) { // 新しい版で足した列：初期設定の前でも、ここで足す（送られた値を捨てないため）
+    ensureTableSheet_(SpreadsheetApp.getActive(), def);
+    t = readTable_(def);
+  }
   var index = {};
   t.rows.forEach(function (r, i) { index[r.id] = { at: i }; });
   var dirty = {};

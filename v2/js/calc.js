@@ -4,8 +4,10 @@
 // - 組の合計 = 基本の金額（入店のときに決まる）＋ 追加の合計
 // - 受け取りは何回でも（割り勘・併用）。合計に達したら退店
 // - 売上・来客数に数えるのは「退店」した組だけ。店内の組の合計は「見込み」
-// - あるはずの現金 = 開店時のレジの現金 ＋ 今日の現金売上 ＋ 入金 − 出金（買い出し） − 回収（オーナーがレジから抜いた分）
+// - あるはずの現金 = 開店時のレジの現金 ＋ 今日の現金売上 ＋ 入金 − 出金 − 回収（オーナーがレジから抜いた分）
 //   回収は支出ではない（仕入れにも月次にも入れない）。レジの現金からだけ引く
+// - 出金は「出した額 → 内訳」（仕入れ・スタッフへの支払い・小口へ・レジに戻す）。レジから減るのは 出した額 − レジに戻した分
+// - 小口現金はレジとは別に数える（あるはずの現金にも月次にも混ぜない）
 
 export const KIND_NOMI = '飲み放題';
 export const KIND_TANPIN = '単品';
@@ -18,6 +20,14 @@ export const ST_DEL = '削除';
 export const MOVE_IN = '入金';
 export const MOVE_OUT = '出金';
 export const MOVE_COLLECT = '回収';
+export const MOVE_PETTY_PAY = '小口から払う'; // レジは変わらない。内訳（仕入れ・スタッフへの支払い）は出金と同じく写す
+export const MOVE_PETTY_BACK = '小口からレジへ'; // レジに入る（入金と同じ向き）
+// 出金の内訳の種類
+export const LINE_BUY = '仕入れ';
+export const LINE_STAFF = 'スタッフ';
+export const LINE_PETTY = '小口';
+export const LINE_BACK = '戻す';
+export const LINE_KINDS = [LINE_BUY, LINE_STAFF, LINE_PETTY, LINE_BACK];
 export const EXTRA_ADD = '追加';
 export const EXTRA_EXT = '延長';
 
@@ -161,13 +171,72 @@ export const pct = (part, whole) => (whole ? Math.round(part / whole * 100) : 0)
 
 // ===== レジ =====
 
-const signed = m => (m.type === MOVE_IN ? 1 : -1) * n(m.amount);
 const active = moves => (moves || []).filter(m => m.status !== ST_DEL);
 
-/** 出し入れの表示：「出金・その他（花）」「入金・オーナーの補充」「オーナーが回収（メモ）」 */
+/** 出金の内訳。前の版の出金（内訳なし）は、全額が1行の仕入れ */
+export function moveLines(m) {
+  if (Array.isArray(m.lines)) return m.lines.filter(l => l && !l.del);
+  if (m.type === MOVE_OUT) return [{ id: 'old', kind: LINE_BUY, category: m.category, note: m.note, amount: n(m.amount) }];
+  return [];
+}
+const linesSum = (m, kind) => moveLines(m).filter(l => l.kind === kind).reduce((a, l) => a + n(l.amount), 0);
+
+/** レジの現金が増える（＋）・減る（−）額 */
+export function registerEffect(m) {
+  if (m.type === MOVE_IN || m.type === MOVE_PETTY_BACK) return n(m.amount);
+  if (m.type === MOVE_OUT) return -(n(m.amount) - linesSum(m, LINE_BACK));
+  if (m.type === MOVE_COLLECT) return -n(m.amount);
+  return 0; // 小口から払う
+}
+
+/** 小口現金が増える（＋）・減る（−）額 */
+export function pettyEffect(m) {
+  if (m.type === MOVE_OUT) return linesSum(m, LINE_PETTY);
+  if (m.type === MOVE_PETTY_PAY || m.type === MOVE_PETTY_BACK) return -n(m.amount);
+  return 0;
+}
+
+/** 小口現金の残高 ＝ 最初の残高（設定。入れるまでは0）＋ 入った分 − 出た分 */
+export function pettyBalance(moves, start = 0) {
+  return n(start) + active(moves).reduce((a, m) => a + pettyEffect(m), 0);
+}
+
+/** 内訳の1行の表示：「仕入れ（飲食物・酒屋）」「スタッフへの支払い（一日ママ）」「小口へ」「レジに戻す」 */
+export function lineLabel(l) {
+  if (l.kind === LINE_BUY) return `仕入れ（${l.category === 'その他' ? `その他・${l.note || ''}` : [l.category, l.note].filter(Boolean).join('・')}）`;
+  if (l.kind === LINE_STAFF) return `スタッフへの支払い（${l.name || ''}）`;
+  if (l.kind === LINE_PETTY) return '小口へ';
+  if (l.kind === LINE_BACK) return 'レジに戻す';
+  return String(l.kind || '');
+}
+
+/** 内訳の確かめ。出した額と内訳の合計が合い、各行が埋まっていれば ok。diff＝出した額 − 内訳の合計 */
+export function checkLines(amount, lines) {
+  const ls = (lines || []).filter(l => l && !l.del);
+  const sum = ls.reduce((a, l) => a + n(l.amount), 0);
+  const diff = n(amount) - sum;
+  let error = '';
+  if (!isInt(amount) || n(amount) <= 0) error = '出した額を入れてください。';
+  else if (!ls.length) error = '内訳を足してください。';
+  else {
+    for (const l of ls) {
+      if (!isInt(l.amount) || n(l.amount) <= 0) { error = `${lineLabel(l)}の金額を入れてください。`; break; }
+      if (l.kind === LINE_BUY && !l.category) { error = '仕入れの科目を選んでください。'; break; }
+      if (l.kind === LINE_BUY && l.category === 'その他' && !String(l.note || '').trim()) { error = '仕入れ（その他）の内容を入れてください。'; break; }
+      if (l.kind === LINE_STAFF && !String(l.name || '').trim()) { error = 'スタッフへの支払いの名前を入れてください。'; break; }
+    }
+    if (!error && diff !== 0) error = diff > 0 ? `内訳があと ${yen(diff)} 足りません。` : `内訳が ${yen(-diff)} 多いです。`;
+  }
+  return { sum, diff, ok: !error, error };
+}
+
+/** 出し入れの表示：「レジから出した：仕入れ（飲食物）・小口へ」「入金・オーナーの補充」「オーナーが回収（メモ）」 */
 export function moveLabel(m) {
   if (m.type === MOVE_COLLECT) return 'オーナーが回収' + (m.note ? `（${m.note}）` : '');
-  return m.type === MOVE_OUT ? `出金・${purchaseLabel(m.category, m.note)}` : `入金・${m.reason || ''}`;
+  if (m.type === MOVE_OUT) return Array.isArray(m.lines) ? 'レジから出した：' + moveLines(m).map(lineLabel).join('・') : `出金・${purchaseLabel(m.category, m.note)}`;
+  if (m.type === MOVE_PETTY_PAY) return '小口から払う：' + moveLines(m).map(lineLabel).join('・');
+  if (m.type === MOVE_PETTY_BACK) return '小口からレジに戻す';
+  return `入金・${m.reason || ''}`;
 }
 
 export function purchaseLabel(category, note) {
@@ -202,13 +271,13 @@ export function registerCalc({ day, closings, moves, dayRow, cashSales, until })
     if (prev) {
       const after = act.filter(m => (m.bizDate > prev.bizDate && m.bizDate < day) || (m.bizDate === prev.bizDate && String(m.at) > String(prev.closedAt)));
       carried = after; // 前の締めのあとに入れた分（閉店後・休みの日の入金・回収など）。開店時の現金に入っている
-      openCash = n(prev.countedCash) + after.reduce((a, m) => a + signed(m), 0);
+      openCash = n(prev.countedCash) + after.reduce((a, m) => a + registerEffect(m), 0);
       openFrom = 'carry';
     }
   }
   const today = act.filter(m => m.bizDate === day && (!until || String(m.at) <= String(until)));
-  const cashIn = today.filter(m => m.type === MOVE_IN).reduce((a, m) => a + n(m.amount), 0);
-  const cashOut = today.filter(m => m.type === MOVE_OUT).reduce((a, m) => a + n(m.amount), 0);
+  const cashIn = today.filter(m => m.type === MOVE_IN || m.type === MOVE_PETTY_BACK).reduce((a, m) => a + n(m.amount), 0);
+  const cashOut = today.filter(m => m.type === MOVE_OUT).reduce((a, m) => a - registerEffect(m), 0); // 出した額 − レジに戻した分
   const collected = today.filter(m => m.type === MOVE_COLLECT).reduce((a, m) => a + n(m.amount), 0);
   return { openCash, openFrom, carried, cashIn, cashOut, collected, expected: n(openCash) + n(cashSales) + cashIn - cashOut - collected };
 }

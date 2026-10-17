@@ -79,11 +79,11 @@ export function renderShiire(root, app) {
       h('section', { class: 'dcard' },
         h('h3', {}, '記録（新しい順）'),
         live.length ? live.sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt))).map(r => {
-          const fromRegister = r.paidFrom === 'レジから';
+          const fromRegister = r.paidFrom === 'レジから' || r.paidFrom === '小口から'; // レジの出し入れ（出金の内訳・小口から払う）から自動で入った分
           return h('div', { class: 'rec-row' + (st.editId === r.id ? ' editing' : '') },
             h('span', { class: 'rec-date' }, fmtMD(r.date)),
             h('b', { class: 'rec-cat' }, r.label || purchaseLabel(r.category, r.note)),
-            h('span', { class: 'rec-shop small grow' }, r.shop || '', fromRegister ? h('span', { class: 'sheet-badge' }, 'レジから') : null),
+            h('span', { class: 'rec-shop small grow' }, r.shop || '', fromRegister ? h('span', { class: 'sheet-badge' }, r.paidFrom) : null),
             h('b', { class: 'num rec-amt' }, yen(r.amount)),
             r.edited ? h('span', { class: 'badge' }, '修正あり') : null,
             fromRegister ? h('span', { class: 'small muted2 rec-hint' }, '今日の画面で直す') : [

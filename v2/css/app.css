@@ -512,6 +512,13 @@ button { cursor: pointer; }
 .cd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .cd-big { font-size: 34px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
 .cd-big.ok { color: var(--accent); }
+.co { display: flex; flex-direction: column; gap: 8px; }
+.co-line { border: 1px solid var(--line, #e3e3df); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.co-add { display: flex; flex-wrap: wrap; gap: 6px; }
+.co-status { border-top: 1px solid var(--line, #e3e3df); padding-top: 8px; }
+.co-msg { font-size: 14px; margin-top: 4px; }
+.co-msg.ok { color: var(--accent); }
+.co-msg.bad { color: #b3261e; }
 .ext-sum { font-size: 20px; font-weight: 700; text-align: center; margin: 12px 0; }
 .cd-sub { font-size: 14px; color: var(--text2); }
 .cd-cap { font-size: 13px; margin-top: 4px; }

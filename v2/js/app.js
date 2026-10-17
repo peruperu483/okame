@@ -57,6 +57,11 @@ app.refreshSettings = async () => {
   const r = await post('bootstrap');
   app.settings = r.settings;
   await store.kvSet('settings', r.settings);
+  if (r.version && r.version !== app.serverVersion) { // GASの版が変わったら、画面を描き直す（新しい版で使える入力を出すため）
+    app.serverVersion = r.version;
+    await store.kvSet('serverVersion', r.version);
+    if (!location.hash || location.hash.startsWith('#today')) route(); // 今日の画面だけ（ほかの画面は入力中かもしれないので、次に開いたときに）
+  }
   renderChrome();
   return r;
 };
@@ -73,6 +78,7 @@ async function start() {
   await store.kvSet('deviceId', app.deviceId);
   app.token = await store.kvGet('token');
   app.settings = await store.kvGet('settings');
+  app.serverVersion = await store.kvGet('serverVersion');
   navigator.storage?.persist?.().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 

@@ -199,3 +199,17 @@ test('延長は選んだ人数だけ：金額＝1人の料金×人数。1人で�
   assert.equal(nomiMinutes(v, S), 120 + 120 + 120);
   assert.equal(extensionExtra(ext, 0).count, 1); // 0人にはしない
 });
+
+test('イベント：金額＝人数×1人の単価。卓の −／＋で人数と金額が変わる。0人より下にならない', async () => {
+  const { eventPeople, unitFix, unitLabel, isUnitEvent } = await import('../v2/js/calc.js');
+  const v = { kind: 'イベント', unitPrice: 5000, basePeople: 20, people: 20, base: 100000, extras: [
+    { id: 'a', type: '人数', delta: 1, amount: 0 }, { id: 'b', type: '人数', delta: 1, amount: 0 }, { id: 'c', type: '人数', delta: -1, amount: 0, del: true },
+    { id: 'd', type: '追加', amount: 3000 }] };
+  assert.equal(eventPeople(v), 22);
+  assert.deepEqual(unitFix(v), { people: 22, base: 110000 });
+  assert.equal(total({ ...v, ...unitFix(v) }), 113000);
+  assert.equal(unitLabel(v), '¥5,000 × 22人');
+  assert.equal(eventPeople({ ...v, basePeople: 1, extras: [{ id: 'x', type: '人数', delta: -1 }, { id: 'y', type: '人数', delta: -1 }] }), 0);
+  assert.equal(isUnitEvent({ kind: 'イベント', base: 54000, people: 6 }), false); // 前の版（合計の金額）
+  assert.deepEqual(unitFix({ kind: 'イベント', base: 54000, people: 6 }), {});
+});

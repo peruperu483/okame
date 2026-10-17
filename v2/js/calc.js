@@ -30,6 +30,7 @@ export const LINE_BACK = '戻す';
 export const LINE_KINDS = [LINE_BUY, LINE_STAFF, LINE_PETTY, LINE_BACK];
 export const EXTRA_ADD = '追加';
 export const EXTRA_EXT = '延長';
+export const EXTRA_PEOPLE = '人数'; // イベントの卓の −／＋（delta：±1。金額は0で、基本の金額＝人数×単価を計算し直す）
 
 const n = v => Number(v) || 0;
 const yen = v => '¥' + Math.round(n(v)).toLocaleString('ja-JP');
@@ -46,7 +47,26 @@ export function label(v) {
   return v.name ? v.name : `${v.no}組目`;
 }
 
-/** 入店のときの基本の金額。飲み放題＝人数×料金、イベント＝団体の合計、単品＝0円 */
+/**
+ * イベントの金額は「人数 × 1人の単価」（unitPrice）。入店のときの人数（basePeople）に、卓の −／＋（人数の追加）を足したのが今の人数
+ * 2台で同時に押しても、追加と同じくIDごとに合わせるので狂わない（GASの recomputeVisit_ と同じ式）
+ * 前の版のイベント（単価なし）は、入れた合計の金額のまま
+ */
+export const isUnitEvent = v => v.kind === KIND_EVENT && n(v.unitPrice) > 0 && v.basePeople !== '' && v.basePeople != null;
+export function eventPeople(v) {
+  if (!isUnitEvent(v)) return n(v.people);
+  return Math.max(0, n(v.basePeople) + live(v.extras).filter(x => x.type === EXTRA_PEOPLE).reduce((a, x) => a + n(x.delta), 0));
+}
+/** 単価のイベントなら、人数と基本の金額を計算し直す（保存の前に足す） */
+export function unitFix(v) {
+  if (!isUnitEvent(v)) return {};
+  const people = eventPeople(v);
+  return { people, base: people * n(v.unitPrice) };
+}
+/** 「¥5,000 × 22人」 */
+export const unitLabel = v => (isUnitEvent(v) ? `${yen(v.unitPrice)} × ${eventPeople(v)}人` : '');
+
+/** 入店のときの基本の金額。飲み放題＝人数×料金、イベント＝団体の合計（人数×単価）、単品＝0円 */
 export function baseAmount(kind, people, s, eventAmount = 0) {
   if (kind === KIND_NOMI) return n(people) * n(s.nomiPrice);
   if (kind === KIND_EVENT) return n(eventAmount);

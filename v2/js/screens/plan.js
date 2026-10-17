@@ -5,7 +5,7 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { ST_DEL } from '../calc.js';
 import { openSheet, pickReason, seg } from '../ui.js';
-import { fmtMD, monthLabel, monthNav, monthRange, msgBox, mountCountdown } from './common.js';
+import { fmtMD, monthLabel, monthNav, monthRange, msgBox, mountCountdown, unitPicker } from './common.js';
 
 const DOW = ['日', '月', '火', '水', '木', '金', '土'];
 const T_CLOSED = '店休日';
@@ -114,7 +114,7 @@ export function renderPlan(root, app) {
       h('div', { class: 'plan-when' }, h('b', {}, fmtMD(e.date)), h('div', { class: 'small muted2' }, e.startTime ? `${e.startTime}〜${e.endTime || ''}` : '—')),
       h('span', { class: 'pbadge' }, e.type),
       h('div', { class: 'grow plan-what' }, h('b', {}, e.title || e.type), detail ? h('div', { class: 'small muted2' }, detail) : null),
-      e.expectedAmount ? h('b', { class: 'num' }, '見込み ' + yen(e.expectedAmount)) : null,
+      e.expectedAmount ? h('b', { class: 'num' }, '見込み ' + yen(e.expectedAmount) + (Number(e.unitPrice) > 0 && Number(e.people) > 0 ? `（${yen(e.unitPrice)} × ${e.people}人）` : '')) : null,
       editable ? h('button', { class: 'btn btn-xs', onclick: () => editItem(e) }, '直す') : null);
   }
 
@@ -160,7 +160,13 @@ export function renderPlan(root, app) {
     let type = e.type || types[0];
     const date = h('input', { class: 'input', type: 'date', value: e.date || today, min: app.auth.isMgr() ? undefined : today });
     const fields = h('div');
-    const v = { title: e.title || '', people: e.people ?? '', contactName: e.contactName || '', contactInfo: e.contactInfo || '', expectedAmount: e.expectedAmount ?? '', startTime: e.startTime || '', endTime: e.endTime || '', memo: e.memo || '', name: '' };
+    const v = { title: e.title || '', people: e.people ?? '', unitPrice: e.unitPrice ?? '', contactName: e.contactName || '', contactInfo: e.contactInfo || '', expectedAmount: e.expectedAmount ?? '', startTime: e.startTime || '', endTime: e.endTime || '', memo: e.memo || '', name: '' };
+    // 見込み＝人数×1人の単価。単価がまだないとき（管理シートから取り込んだ合計の金額など）は、金額のまま
+    const unitExpected = () => (Number(v.unitPrice) > 0 && Number(v.people) > 0 ? Number(v.unitPrice) * Number(v.people) : null);
+    const expBox = h('div');
+    const paintExp = () => put(expBox, unitExpected() != null
+      ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '売上見込み'), h('b', { class: 'num' }, `${yen(unitExpected())}（${yen(v.unitPrice)} × ${v.people}人）`))
+      : inp('売上見込み（円。単価が決まっていないとき）', 'expectedAmount', { type: 'number', inputmode: 'numeric', placeholder: '団体の合計。月の目標の「あと」に入ります' }));
     const msg = h('div');
     const inp = (label, key, attrs = {}) => h('div', { class: 'field' }, h('div', { class: 'field-label' }, label),
       h('input', { class: 'input', value: String(v[key]), ...attrs, oninput: ev => { v[key] = ev.target.value; } }));
@@ -175,10 +181,13 @@ export function renderPlan(root, app) {
       put(fields,
         inp('内容', 'title', { placeholder: '例：日本酒の会・町内会' }),
         h('div', { class: 'grid2' }, inp('開始', 'startTime', { type: 'time' }), inp('終了', 'endTime', { type: 'time' })),
-        inp('人数', 'people', { type: 'number', inputmode: 'numeric' }),
-        inp('売上見込み（円）', 'expectedAmount', { type: 'number', inputmode: 'numeric', placeholder: '団体の合計。月の目標の「あと」に入ります' }),
+        h('div', { class: 'field' }, h('div', { class: 'field-label' }, '人数'),
+          h('input', { class: 'input', type: 'number', inputmode: 'numeric', value: String(v.people), oninput: ev => { v.people = ev.target.value; paintExp(); } })),
+        h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の単価'), unitPicker(app, v.unitPrice, u => { v.unitPrice = u; paintExp(); })),
+        expBox,
         showContact() ? [inp('幹事の名前', 'contactName'), inp('幹事の連絡先', 'contactInfo', { type: 'tel' })] : h('p', { class: 'help' }, '幹事の名前と連絡先は、店長だけが見て入れられます。'),
         inp('メモ', 'memo'));
+      paintExp();
     };
     paintFields();
     openSheet(close => [
@@ -202,7 +211,8 @@ export function renderPlan(root, app) {
             else {
               const data = {
                 date: d, type, title: v.title.trim() || type, people: v.people === '' ? null : Number(v.people),
-                expectedAmount: v.expectedAmount === '' ? null : Number(v.expectedAmount), startTime: v.startTime, endTime: v.endTime,
+                unitPrice: Number(v.unitPrice) > 0 ? Number(v.unitPrice) : null,
+                expectedAmount: unitExpected() ?? (v.expectedAmount === '' ? null : Number(v.expectedAmount)), startTime: v.startTime, endTime: v.endTime,
                 memo: v.memo.trim(), status: '有効', ...(showContact() ? { contactName: v.contactName.trim(), contactInfo: v.contactInfo.trim() } : {})
               };
               await app.sync.save('events', e.id || uuid(), data, isNew ? {} : { log: { type: '予定を直す', reason: '', before: e, after: data } });

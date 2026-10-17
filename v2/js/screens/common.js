@@ -86,4 +86,26 @@ export function subHead(title, sub, extra) {
 }
 
 /** お知らせ（緑・赤） */
+/**
+ * イベントの1人の単価：3,000円・4,000円・5,000円のボタン（設定 eventUnitPrices）と手打ちの欄。el.value() で今の値（未入力は ''）
+ */
+export function unitPicker(app, value, onChange) {
+  const opts = (app.settings?.eventUnitPrices || [3000, 4000, 5000]).map(Number);
+  let cur = value === '' || value == null ? '' : Number(value);
+  const el = h('div', { class: 'unit-pick' });
+  const inp = h('input', {
+    class: 'input', type: 'number', inputmode: 'numeric', placeholder: 'ほかの単価（手打ち）', 'aria-label': '1人の単価（手打ち）',
+    value: cur !== '' && !opts.includes(cur) ? String(cur) : '',
+    oninput: e => { cur = e.target.value === '' ? '' : Number(e.target.value); el.querySelectorAll('.pick').forEach(b => b.classList.remove('on')); onChange?.(cur); }
+  });
+  const paint = () => put(el,
+    h('div', { class: 'grid3' }, opts.map(o => h('button', {
+      type: 'button', class: 'btn pick' + (cur === o ? ' on' : ''), onclick: () => { cur = o; inp.value = ''; paint(); onChange?.(cur); }
+    }, yen(o)))),
+    inp);
+  paint();
+  el.value = () => cur;
+  return el;
+}
+
 export const msgBox = (text, bad) => (text ? h('div', { class: 'pay-msg ' + (bad ? 'bad' : 'good'), role: 'status' }, text) : null);

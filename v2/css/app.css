@@ -519,6 +519,10 @@ button { cursor: pointer; }
 .co-msg { font-size: 14px; margin-top: 4px; }
 .co-msg.ok { color: var(--accent); }
 .co-msg.bad { color: #b3261e; }
+.gwrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.g-adj { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.g-adj .g-adj-n { font-size: 22px; font-weight: 700; min-width: 64px; text-align: center; }
+.unit-pick { display: flex; flex-direction: column; gap: 8px; }
 .ext-sum { font-size: 20px; font-weight: 700; text-align: center; margin: 12px 0; }
 .cd-sub { font-size: 14px; color: var(--text2); }
 .cd-cap { font-size: 13px; margin-top: 4px; }

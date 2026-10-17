@@ -4,7 +4,7 @@ import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, addDays } from '../bizday.js';
 import {
   KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, MOVE_IN, MOVE_OUT, MOVE_COLLECT, MOVE_PETTY_PAY,
-  label, payLabel, total, methodSums, livePays, markAllDeleted, daySummary, pct, registerCalc, registerEffect, moveLabel, validateMove, closingIsStale
+  label, payLabel, total, methodSums, unitLabel, livePays, markAllDeleted, daySummary, pct, registerCalc, registerEffect, moveLabel, validateMove, closingIsStale
 } from '../calc.js';
 import { pickReason } from '../ui.js';
 import { fmtMD, mountCountdown } from './common.js';
@@ -121,7 +121,7 @@ export function renderToday(root, app) {
         h('div', { class: 'drow-time num' }, v.outAt ? fmtHM(v.outAt) : ''),
         h('div', { class: 'drow-main' },
           h('div', { class: 'drow-name' }, `${label(v)}　${v.people}名`),
-          h('div', { class: 'small muted2' }, `${v.kind}・${payLabel(v)}`)),
+          h('div', { class: 'small muted2' }, `${v.kind}` + (unitLabel(v) ? `（${unitLabel(v)}）` : '') + `・${payLabel(v)}`)),
         h('b', { class: 'num' }, yen(total(v))),
         canEdit ? h('button', { class: 'btn btn-xs', onclick: () => undo(v) }, '店内に戻す') : null))
         : h('div', { class: 'muted2 pad' }, 'まだ退店した組はありません'));

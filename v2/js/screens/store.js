@@ -3,11 +3,13 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { nowIso, fmtHM, timeOnBizDay, addDays } from '../bizday.js';
 import {
-  KIND_NOMI, KIND_TANPIN, KIND_EVENT, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT,
+  KIND_NOMI, KIND_TANPIN, KIND_EVENT, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT, EXTRA_PEOPLE,
+  isUnitEvent, eventPeople, unitFix, unitLabel,
   nextNo, label, baseAmount, extrasTotal, total, paidTotal, remaining, overpaid, methodSums, receive,
   timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel
 } from '../calc.js';
 import { openSheet, pickReason, stepper } from '../ui.js';
+import { unitPicker } from './common.js';
 
 const BADGE = { lo: 'ラストオーダー', over: '時間超過' };
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -18,10 +20,11 @@ export function renderStore(root, app) {
   const S = () => app.settings;
   const day = () => app.bizDate();
   const st = {
-    size: 2, kind: KIND_NOMI, name: '', evAmount: '', evEnd: '', evId: '', err: '',
+    size: 2, kind: KIND_NOMI, name: '', evUnit: '', evEnd: '', evId: '', err: '',
     pane: 0, all: [], events: [], openId: null, busy: false,
     det: null // 広げた卓の入力（追加の金額・直している追加・支払い方法・受け取る金額・お知らせ）
   };
+  const evAmount = () => (Number(st.evUnit) || 0) * st.size; // イベント＝人数×1人の単価
   const inStore = () => st.all.filter(v => v.status === ST_IN).sort((a, b) => String(a.inAt).localeCompare(String(b.inAt)));
   const editable = () => app.canEdit('visits', day());
 
@@ -52,7 +55,7 @@ export function renderStore(root, app) {
     tanpinNote.hidden = st.kind !== KIND_TANPIN;
     if (st.kind === KIND_EVENT) paintEventBox();
     errEl.textContent = st.err;
-    enterBtn.textContent = `入店する（${st.size}名・${yen(baseAmount(st.kind, st.size, S(), st.evAmount))}）`;
+    enterBtn.textContent = `入店する（${st.size}名・${yen(baseAmount(st.kind, st.size, S(), evAmount()))}）`;
   }
 
   function paintEventBox() {
@@ -61,13 +64,13 @@ export function renderStore(root, app) {
       todays.length ? [h('div', { class: 'lab' }, '今日の予定から選ぶ'),
         todays.map(e => h('button', {
           class: 'btn pick left' + (st.evId === e.id ? ' on' : ''), onclick: () => {
-            Object.assign(st, { evId: e.id, name: e.title || '', evAmount: String(e.expectedAmount || ''), evEnd: e.endTime || '', size: Number(e.people) || st.size, err: '' });
+            Object.assign(st, { evId: e.id, name: e.title || '', evUnit: Number(e.unitPrice) > 0 ? Number(e.unitPrice) : st.evUnit, evEnd: e.endTime || '', size: Number(e.people) || st.size, err: '' });
             nameInput.value = st.name;
             paintEntry();
           }
         }, [e.startTime, e.title, e.people ? e.people + '名' : ''].filter(Boolean).join('　')))] : null,
-      lab('金額（団体の合計）', 'evAmt'),
-      h('input', { id: 'evAmt', class: 'input', type: 'number', inputmode: 'numeric', placeholder: '例：54000', value: st.evAmount, oninput: e => { st.evAmount = e.target.value; st.err = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(st.evAmount)}）`; } }),
+      h('div', { class: 'lab' }, '1人の単価（金額＝人数×単価）'),
+      unitPicker(app, st.evUnit, u => { st.evUnit = u; st.err = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(evAmount())}）`; }),
       lab('終了の予定時刻（イベントごとに違う）', 'evEnd'),
       h('input', { id: 'evEnd', class: 'input', type: 'time', value: st.evEnd, oninput: e => { st.evEnd = e.target.value; st.err = ''; } }));
   }
@@ -87,16 +90,17 @@ export function renderStore(root, app) {
     if (!editable()) { st.err = 'この営業日の記録は、店長モードで直せます。'; return paintEntry(); }
     const isEv = st.kind === KIND_EVENT;
     const endAt = isEv ? timeOnBizDay(day(), st.evEnd, S().bizDayCutoffHour ?? 12) : '';
-    if (isEv && (!(Number(st.evAmount) > 0) || !endAt)) { st.err = 'イベントは、金額と終了の予定時刻を入れてください。'; return paintEntry(); }
+    if (isEv && (!(Number(st.evUnit) > 0) || !endAt)) { st.err = 'イベントは、1人の単価と終了の予定時刻を入れてください。'; return paintEntry(); }
     st.busy = true;
     setTimeout(() => { st.busy = false; }, 700);
-    const base = baseAmount(st.kind, st.size, S(), st.evAmount);
+    const base = baseAmount(st.kind, st.size, S(), evAmount());
     const v = {
       bizDate: day(), no: nextNo(st.all.filter(x => x.bizDate === day())), name: st.name.trim(), people: st.size, kind: st.kind,
       inAt: nowIso(), endAt, status: ST_IN, base, extras: [], pays: [], total: base, cash: 0, cashless: 0, point: 0,
-      eventId: isEv ? st.evId : '', trial: app.isTrial(day())
+      eventId: isEv ? st.evId : '', trial: app.isTrial(day()),
+      ...(isEv ? { unitPrice: Number(st.evUnit), basePeople: st.size } : {})
     };
-    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evAmount: '', evEnd: '', evId: '', err: '' });
+    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evUnit: '', evEnd: '', evId: '', err: '' });
     nameInput.value = '';
     paintEntry();
     await app.sync.save('visits', uuid(), v);
@@ -140,13 +144,13 @@ export function renderStore(root, app) {
     summaryEl.textContent = `${list.length}組・${list.reduce((a, v) => a + (Number(v.people) || 0), 0)}名`;
     const groups = [list.filter(v => v.kind !== KIND_EVENT), list.filter(v => v.kind === KIND_EVENT)];
     const empty = ['通常の組はいません', 'イベントの組はいません'];
-    groups.forEach((g, i) => put(panes[i], g.length ? g.map(card) : h('div', { class: 'pane-empty' }, empty[i])));
+    groups.forEach((g, i) => put(panes[i], g.length ? g.map(v => (isUnitEvent(v) ? h('div', { class: 'gwrap' }, card(v), peopleAdj(v)) : card(v))) : h('div', { class: 'pane-empty' }, empty[i])));
     paintPaneBar();
   }
 
   function metaLine(v) {
     const ex = extrasTotal(v);
-    const amt = yen(total(v)) + (ex > 0 ? `（追加 ${yen(ex)}）` : '');
+    const amt = isUnitEvent(v) ? `${unitLabel(v)}` + (ex > 0 ? ` ＋ 追加 ${yen(ex)}` : '') + ` ＝ ${yen(total(v))}` : yen(total(v)) + (ex > 0 ? `（追加 ${yen(ex)}）` : '');
     const old = v.bizDate !== day() ? `${Number(v.bizDate.slice(5, 7))}/${Number(v.bizDate.slice(8, 10))}の組　·　` : ''; // 前の営業日に残った組
     return old + (v.kind === KIND_EVENT && v.endAt ? `${fmtHM(v.inAt)}〜${fmtHM(v.endAt)}　·　${amt}` : `入店 ${fmtHM(v.inAt)}　·　${amt}`);
   }
@@ -164,6 +168,25 @@ export function renderStore(root, app) {
       h('div', { class: 'g-mid' }, h('span', { class: 'g-time' }, timeText(v, t)), h('span', { class: 'g-people' }, v.people + '名')),
       h('div', { class: 'g-meta' }, metaLine(v)),
       paid > 0 ? h('div', { class: 'g-paid' }, `受け取り済み ${yen(paid)}　残り ${yen(remaining(v))}`) : null);
+  }
+
+  // ===== イベントの卓の人数（−／＋）。1人ずつ。金額もすぐ変わる。続けて押しても1回ずつ順に保存する =====
+  let adjChain = Promise.resolve();
+  function peopleAdj(v) {
+    return h('div', { class: 'g-adj' },
+      h('button', { class: 'btn stepper-btn', 'aria-label': `${label(v)}の人数を1人減らす`, onclick: () => tapPeople(v, -1) }, '−'),
+      h('span', { class: 'g-adj-n num' }, `${eventPeople(v)}名`),
+      h('button', { class: 'btn stepper-btn', 'aria-label': `${label(v)}の人数を1人増やす`, onclick: () => tapPeople(v, 1) }, '＋'));
+  }
+  function tapPeople(v, d) { adjChain = adjChain.then(() => adjustPeople(v, d)).catch(() => {}); }
+  async function adjustPeople(v, d) {
+    const cur = await app.store.getRow('visits', v.id);
+    if (!cur || cur.status !== ST_IN) return;
+    if (!app.canEdit('visits', cur.bizDate)) { toast('前の営業日の組は、店長モードで直せます', 'err'); return; }
+    const before = eventPeople(cur);
+    if (d < 0 && before <= 0) { toast('0人より少なくはできません', 'err'); return; }
+    await saveVisit(cur, { extras: [...(cur.extras || []), { id: uuid(), type: EXTRA_PEOPLE, delta: d, amount: 0, at: nowIso() }] },
+      { type: 'イベントの人数を変える', reason: '', before: { people: before }, after: { people: before + d } });
   }
 
   // ===== 広げた卓 =====
@@ -210,8 +233,10 @@ export function renderStore(root, app) {
   /** 保存（合計と支払い方法ごとの受け取りも一緒に直す）。計算は端末の最新の行から */
   async function saveVisit(v, patch, log) {
     const cur = (await app.store.getRow('visits', v.id)) || v;
-    const next = { ...cur, ...patch };
-    await app.sync.save('visits', v.id, { ...patch, total: total(next), ...methodSums(next.pays) }, log ? { log } : {});
+    let next = { ...cur, ...patch };
+    const fix = unitFix(next); // イベント（単価）：人数と基本の金額（人数×単価）を計算し直す
+    next = { ...next, ...fix };
+    await app.sync.save('visits', v.id, { ...patch, ...fix, total: total(next), ...methodSums(next.pays) }, log ? { log } : {});
   }
 
   /** いま開いている卓の最新の行。閉じた卓・退店した組なら null（古い画面からの操作を無視する） */
@@ -238,7 +263,7 @@ export function renderStore(root, app) {
       class: 'input', type: 'number', inputmode: 'numeric', 'aria-label': '追加の金額', placeholder: '金額を入力', value: d.addAmt,
       oninput: e => { d.addAmt = e.target.value; }
     });
-    const extras = liveExtras(v).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
+    const extras = liveExtras(v).filter(x => x.type !== EXTRA_PEOPLE).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
       h('span', { class: 'xlabel' }, x.type === EXTRA_EXT ? `${extraLabel(x)}　${yen(x.amount)}` : yen(x.amount), d.editId === x.id ? '　← 直している' : ''),
       x.type === EXTRA_EXT
         ? h('button', { class: 'btn btn-xs', onclick: () => pickExtension(v, x) }, '人数を直す')
@@ -289,7 +314,7 @@ export function renderStore(root, app) {
         h('button', { class: 'btn btn-sm', onclick: closeDetail }, '× 閉じる')),
       h('div', { class: 'det-sum' },
         h('div', {}, h('div', { class: 'det-time' }, timeText(v, t)), h('div', { class: 'det-meta' }, metaLine(v))),
-        h('div', { class: 'det-people' }, v.people + '名'),
+        isUnitEvent(v) ? peopleAdj(v) : h('div', { class: 'det-people' }, v.people + '名'),
         h('span', { class: 'grow' }),
         h('div', { class: 'det-total' }, h('div', { class: 'lab' }, '合計'), h('div', { class: 'num' }, yen(total(v))))),
       h('div', { class: 'det-grid' }, addBox, payBox));
@@ -393,16 +418,19 @@ export function renderStore(root, app) {
   // --- 組を直す・入店を削除 ---
   function editGroup(v) {
     const name = h('input', { class: 'input', type: 'text', value: v.name || '', placeholder: `空なら ${v.no}組目`, maxlength: 20 });
-    const people = stepper(Number(v.people) || 1, { min: 1, max: 99 });
+    const people = stepper(Number(v.people) || 1, { min: isUnitEvent(v) ? 0 : 1, max: 99 });
     const isEv = v.kind === KIND_EVENT;
+    const unitEv = isUnitEvent(v);
     const evAmt = h('input', { class: 'input', type: 'number', inputmode: 'numeric', value: String(v.base ?? '') });
+    const unit = unitEv ? unitPicker(app, v.unitPrice) : null;
     const evEnd = h('input', { class: 'input', type: 'time', value: v.endAt ? fmtHM(v.endAt) : '' });
     openSheet(close => [
       h('h2', {}, `${label(v)}を直す`),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '名前'), name),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '人数'), people,
         v.kind === KIND_NOMI ? h('p', { class: 'help' }, `飲み放題は、人数×${yen(S().nomiPrice)} に基本の金額も直します。`) : null),
-      isEv ? [h('div', { class: 'field' }, h('div', { class: 'field-label' }, '金額（団体の合計）'), evAmt),
+      isEv ? [unitEv ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の単価（金額＝人数×単価）'), unit)
+        : h('div', { class: 'field' }, h('div', { class: 'field-label' }, '金額（団体の合計）'), evAmt),
         h('div', { class: 'field' }, h('div', { class: 'field-label' }, '終了の予定時刻'), evEnd)] : null,
       h('div', { class: 'btn-row' },
         h('button', {
@@ -422,8 +450,15 @@ export function renderStore(root, app) {
             if (v.kind === KIND_NOMI) patch.base = baseAmount(KIND_NOMI, patch.people, S());
             if (isEv) {
               const endAt = timeOnBizDay(v.bizDate, evEnd.value, S().bizDayCutoffHour ?? 12);
-              if (!(Number(evAmt.value) > 0) || !endAt) { toast('金額と終了の予定時刻を入れてください', 'err'); return; }
-              Object.assign(patch, { base: Number(evAmt.value), endAt });
+              if (unitEv) {
+                const u = Number(unit.value());
+                if (!(u > 0) || !endAt) { toast('1人の単価と終了の予定時刻を入れてください', 'err'); return; }
+                const adj = eventPeople(v) - Number(v.basePeople); // −／＋で足し引きした人数
+                Object.assign(patch, { unitPrice: u, basePeople: patch.people - adj, base: patch.people * u, endAt });
+              } else {
+                if (!(Number(evAmt.value) > 0) || !endAt) { toast('金額と終了の予定時刻を入れてください', 'err'); return; }
+                Object.assign(patch, { base: Number(evAmt.value), endAt });
+              }
             }
             close();
             const keys = Object.keys(patch);

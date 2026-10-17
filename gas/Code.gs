@@ -33,7 +33,8 @@ var TABLES = {
       ['status', '状態', 't'], ['outAt', '退店時刻', 't'],
       ['base', '基本の金額', 'n'], ['extras', '追加', 'j'], ['total', '合計', 'n'],
       ['pays', '受け取り', 'j'], ['cash', '現金', 'n'], ['cashless', 'キャッシュレス', 'n'], ['point', 'ポイント', 'n'],
-      ['eventId', '予定ID', 't'], ['trial', '試運転', 'b']
+      ['eventId', '予定ID', 't'], ['trial', '試運転', 'b'],
+      ['unitPrice', '1人の単価', 'n'], ['basePeople', '入店時の人数', 'n'] // イベント：金額＝人数×単価。人数＝入店時の人数＋卓の −／＋（追加の「人数」）
     ].concat(COMMON_TAIL)
   },
   // 1日1行（ID＝営業日）。あるはずの現金 = 開店時の現金 + 現金売上 + 入金 − 出金
@@ -107,7 +108,7 @@ var TABLES = {
       ['id', 'ID', 't'], ['date', '日付', 't'], ['type', '種類', 't'], ['title', '内容', 't'],
       ['people', '人数', 'n'], ['contactName', '幹事', 't'], ['contactInfo', '幹事の連絡先', 't'],
       ['expectedAmount', '見込みの金額', 'n'], ['startTime', '開始', 't'], ['endTime', '終了', 't'],
-      ['status', '状態', 't']
+      ['status', '状態', 't'], ['unitPrice', '1人の単価', 'n'] // 見込みの金額＝人数×単価（画面が計算して入れる）
     ].concat(COMMON_TAIL)
   },
   requests: {
@@ -158,7 +159,8 @@ var DEFAULT_SETTINGS = {
   monthlyTargets: {}, // 月ごとの売上目標（'2026-11': 1200000 の形）。ない月は targets.monthlySales
   // 月のタブのシフトのプルダウン：列2・列3・列4の選択肢。列5は、店長とスタッフと「店休日」
   shiftColumnChoices: [['店休日', '岡本', '加奈'], ['加奈', '優輝'], ['優輝']],
-  pettyCashStart: 0 // 小口現金の最初の残高（わかったら店長が入れる。入れるまでは0から数える）
+  pettyCashStart: 0, // 小口現金の最初の残高（わかったら店長が入れる。入れるまでは0から数える）
+  eventUnitPrices: [3000, 4000, 5000] // イベントの1人の単価のボタン（予定と入店）
 };
 
 var SETTING_LABELS = {
@@ -188,7 +190,8 @@ var SETTING_LABELS = {
   managerName: '店長の名前（シフトの選び方に出る）',
   monthlyTargets: '月ごとの売上目標（月 → 円）',
   shiftColumnChoices: '月のタブのシフトのプルダウン（列2・列3・列4の選択肢）',
-  pettyCashStart: '小口現金の最初の残高（円）'
+  pettyCashStart: '小口現金の最初の残高（円）',
+  eventUnitPrices: 'イベントの1人の単価のボタン（円）'
 };
 
 var MGR_TTL_SEC = 2 * 60 * 60;
@@ -623,7 +626,7 @@ function upsert_(tableKey, ops, ctx) {
       if (tableKey === 'visits') merged = recomputeVisit_(merged);
       if (hit.fresh != null) fresh[hit.fresh] = merged;
       else { t.rows[hit.at] = merged; dirty[hit.at] = true; }
-      var changed = stale || ['extras', 'pays', 'total', 'cash', 'cashless', 'point'].some(function (k) { return k in sent && JSON.stringify(merged[k]) !== JSON.stringify(sent[k]); });
+      var changed = stale || ['extras', 'pays', 'total', 'cash', 'cashless', 'point', 'people', 'base'].some(function (k) { return k in sent && JSON.stringify(merged[k]) !== JSON.stringify(sent[k]); });
       results.push(changed ? { opId: op.opId, ok: true, stale: stale || undefined, current: stripHidden_(def, merged, ctx) } : { opId: op.opId, ok: true });
       return;
     } else {
@@ -668,6 +671,12 @@ function recomputeVisit_(row) {
   var live = function (a) { return (Array.isArray(a) ? a : []).filter(function (x) { return x && !x.del; }); };
   var sum = function (a, f) { return a.reduce(function (t, x) { return t + (f ? (f(x) ? n(x.amount) : 0) : n(x.amount)); }, 0); };
   var pays = live(row.pays);
+  // イベント（単価あり）：人数＝入店時の人数＋卓の −／＋、基本の金額＝人数×単価（2台で同時に押しても、追加と同じくIDごとに合わせる）
+  if (row.kind === 'イベント' && n(row.unitPrice) > 0 && row.basePeople !== '' && row.basePeople != null) {
+    var adj = live(row.extras).reduce(function (t, x) { return t + (x.type === '人数' ? n(x.delta) : 0); }, 0);
+    row.people = Math.max(0, n(row.basePeople) + adj);
+    row.base = row.people * n(row.unitPrice);
+  }
   row.total = n(row.base) + sum(live(row.extras));
   row.cash = sum(pays, function (p) { return p.method === '現金'; });
   row.cashless = sum(pays, function (p) { return p.method === 'キャッシュレス'; });
@@ -1891,7 +1900,7 @@ function expectedOpsFromCell_(date, value, live, settings, now) {
   live.forEach(function (e, i) {
     var want = i === 0 ? (v === 0 ? 0 : Math.max(0, v - others)) : (v === 0 ? 0 : e.expectedAmount);
     if (want === e.expectedAmount) return;
-    ops.push({ opId: 'sheet-exp-' + e.id + '-' + now, id: e.id, data: { expectedAmount: want === 0 ? null : want, updatedAt: now } });
+    ops.push({ opId: 'sheet-exp-' + e.id + '-' + now, id: e.id, data: { expectedAmount: want === 0 ? null : want, unitPrice: null, updatedAt: now } }); // スプシで金額を打ったら、単価の計算はやめて金額のまま
   });
   return ops;
 }
@@ -2213,7 +2222,8 @@ function importLegacyPlans_(source, today) {
         keep[id] = true;
         t.events += 1;
         var data = { date: d.date, title: title, status: '有効', memo: LEGACY_PLAN_MARK, updatedAt: now };
-        if (future) data.expectedAmount = k === 0 && amount > 0 ? amount : null; // 過ぎた日の見込みは触らない（カウンターにも入らない）
+        var unitSet = eventById[id] && Number(eventById[id].unitPrice) > 0 && Number(eventById[id].people) > 0; // アプリで人数と単価を入れた予定は、人数×単価のまま
+        if (future && !unitSet) data.expectedAmount = k === 0 && amount > 0 ? amount : null; // 過ぎた日の見込みは触らない（カウンターにも入らない）
         if (!eventById[id]) { data.type = type; data.createdAt = now; }
         eventOps.push({ opId: 'lge-' + id + '-' + now, id: id, data: data });
       });

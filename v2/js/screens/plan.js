@@ -114,7 +114,7 @@ export function renderPlan(root, app) {
       h('div', { class: 'plan-when' }, h('b', {}, fmtMD(e.date)), h('div', { class: 'small muted2' }, e.startTime ? `${e.startTime}〜${e.endTime || ''}` : '—')),
       h('span', { class: 'pbadge' }, e.type),
       h('div', { class: 'grow plan-what' }, h('b', {}, e.title || e.type), detail ? h('div', { class: 'small muted2' }, detail) : null),
-      e.expectedAmount ? h('b', { class: 'num' }, '見込み ' + yen(e.expectedAmount) + (Number(e.unitPrice) > 0 && Number(e.people) > 0 ? `（${yen(e.unitPrice)} × ${e.people}人）` : '')) : null,
+      e.expectedAmount ? h('b', { class: 'num plan-amt' }, '見込み ' + yen(e.expectedAmount) + (Number(e.unitPrice) > 0 && Number(e.people) > 0 ? `（${yen(e.unitPrice)} × ${e.people}人）` : '')) : null,
       editable ? h('button', { class: 'btn btn-xs', onclick: () => editItem(e) }, '直す') : null);
   }
 

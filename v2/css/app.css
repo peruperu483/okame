@@ -495,7 +495,9 @@ button { cursor: pointer; }
 .plan-item { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
 .day-panel .plan-item { padding: 10px 0; border: none; border-top: 1px solid #EFEFEC; border-radius: 0; }
 .plan-when { width: 100px; flex-shrink: 0; }
-.plan-what { min-width: 0; }
+.plan-what { flex: 1 1 9em; min-width: 7em; } /* 名前の欄を押しつぶさない（狭い日付の欄では、見込みと「直す」が下の行に回る） */
+.plan-item { flex-wrap: wrap; }
+.plan-amt { margin-left: auto; text-align: right; }
 .pbadge { flex-shrink: 0; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-weak); }
 .pbadge.gray { color: var(--ink2); background: #EFEFEC; }
 .pbadge.amber { color: var(--warn); background: var(--warn-bg); }

@@ -9,6 +9,7 @@ import {
 import { pickReason } from '../ui.js';
 import { fmtMD, mountCountdown } from './common.js';
 import { canUseLines, cashOutEditor, saveCashOut, editCashOut, pettyCard } from './cashout.js';
+import { lateEditState, openLateVisit } from './lateedit.js';
 
 const PETTY_FROM = '2026-10-01'; // 小口現金の残高を数えるために読む範囲の始め
 
@@ -90,9 +91,13 @@ export function renderToday(root, app) {
   }
   function paintStale() {
     if (st.date) {
-      const ro = !app.canEdit('visits', st.date);
+      const late = lateEditState(app, st.date);
+      const note = { ok: '店長モードです。「この日に組を足す」と各組の「直す」で、売上を足したり直したりできます。',
+        staff: '見るだけです（足したり直したりは店長。上の「店長モード」から）。',
+        range: '見るだけです（直せるのは今月と先月まで）。',
+        'old-gas': '見るだけです（足したり直したりは、GASの貼り替えが済んでから使えます）。' }[late];
       return put(staleBox, h('div', { class: 'alert warn row-between', role: 'status' },
-        h('span', {}, `${fmtMD(st.date)}を見ています。` + (ro ? '見るだけです（直すのは店長。上の「店長モード」から）。' : '')),
+        h('span', {}, `${fmtMD(st.date)}を見ています。` + note),
         h('button', { class: 'btn btn-sm', onclick: () => openDay(null) }, '今日に戻る')));
     }
     // 過ぎた日の締めと会計を見る（バイトに見せるかは設定「バイトに見せる範囲」）
@@ -127,14 +132,19 @@ export function renderToday(root, app) {
   function paintDone() {
     const done = st.visits.filter(v => v.status === ST_OUT).sort((a, b) => String(b.outAt).localeCompare(String(a.outAt)));
     const canEdit = app.canEdit('visits', day());
+    const late = st.date && lateEditState(app, st.date) === 'ok'; // 過ぎた日の売上を、店長があとから足す・直す
     put(doneBox,
       h('h2', {}, '精算済みの組（新しい順）'),
+      late ? h('div', { class: 'late-add' },
+        h('button', { class: 'btn btn-sm', onclick: () => openLateVisit(app, { date: st.date }) }, '＋ この日に組を足す'),
+        h('span', { class: 'small muted2' }, '打ち忘れなど。足すと締めの数字も計算し直します')) : null,
       done.length ? done.map(v => h('div', { class: 'drow' },
         h('div', { class: 'drow-time num' }, v.outAt ? fmtHM(v.outAt) : ''),
         h('div', { class: 'drow-main' },
           h('div', { class: 'drow-name' }, `${label(v)}　${v.people}名`),
           h('div', { class: 'small muted2' }, (v.kind === '常連' ? unitLabel(v) : `${v.kind}` + (unitLabel(v) ? `（${unitLabel(v)}）` : '')) + `・${payLabel(v)}`)),
         h('b', { class: 'num' }, yen(total(v))),
+        late ? h('button', { class: 'btn btn-xs', onclick: () => openLateVisit(app, { date: st.date, visit: v }) }, '直す') : null,
         canEdit ? h('button', { class: 'btn btn-xs', onclick: () => undo(v) }, '店内に戻す') : null))
         : h('div', { class: 'muted2 pad' }, 'まだ退店した組はありません'));
   }
@@ -282,7 +292,11 @@ export function renderToday(root, app) {
         row('− 回収（オーナーが抜いた分）', y(c.collected)),
         row('＝ あるはずの現金', y(c.expectedCash), true),
         row('数えた現金', y(c.countedCash)),
-        row('差額', signedYen(Number(c.diff) || 0), true),
+        row(Number(c.lateAdjust) ? '差額（今の記録で計算し直した）' : '差額', signedYen(Number(c.diff) || 0), true),
+        Number(c.lateAdjust) ? [h('div', { class: 'lab' }, 'あとから直した分'),
+          row('現金売上の増減（あとから足した・直した分）', signedYen(Number(c.lateAdjust))),
+          row('締めたときの差額', signedYen((Number(c.diff) || 0) + Number(c.lateAdjust))),
+          h('div', { class: 'small muted2' }, '数えた現金は、締めたときのままです。')] : null,
         h('div', { class: 'small muted2' }, `${fmtHM(c.closedAt)}に閉店` + (st.dayRow?.shiftActual ? `・入った人：${st.dayRow.shiftActual}` : '')),
         h('button', { class: 'btn btn-sm', onclick: async () => { if (!(await app.requireMgr('締め直すのは店長だけです。店長の暗証番号を押してください。'))) return; st.redo = true; paintAll(); } }, canEdit ? '締め直す（店長）' : '店長モードで締め直す'));
     }
@@ -355,7 +369,7 @@ export function renderToday(root, app) {
       bizDate: day(), closedAt: nowIso(),
       ...Object.fromEntries(SUM_KEYS.map(k => [k, sum[k]])),
       openCash: reg.openCash, cashIn: reg.cashIn, cashOut: reg.cashOut, collected: reg.collected, expectedCash: reg.expected,
-      countedCash: counted, diff: counted - reg.expected, trial: app.isTrial(day())
+      countedCash: counted, diff: counted - reg.expected, lateAdjust: 0, trial: app.isTrial(day())
     };
     st.closeMsg = `閉店しました。差額 ${signedYen(data.diff)}。数えた ${yen(counted)} が次の営業日の開店時の現金になります`;
     await app.sync.save('closings', day(), data, closing ? { log: { type: '締めのやり直し', reason: '', before: closing, after: data } } : {});

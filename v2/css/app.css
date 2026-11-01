@@ -571,3 +571,10 @@ button { cursor: pointer; }
 .a2hs p { margin: 0; font-size: 14px; line-height: 1.5; }
 .a2hs .btn { align-self: flex-start; }
 .a2hs.inline { position: static; box-shadow: none; margin: 8px 0; text-align: left; }
+
+/* 過ぎた日の売上を足す・直す（店長） */
+.late-add { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.late-pays .lp-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.late-pays .lp-method { flex: 0 0 9em; }
+.late-pays .lp-amt { flex: 1 1 auto; min-width: 0; }
+.late-status { margin: 12px 0; padding: 10px 12px; background: var(--bg3); border-radius: var(--radius); }

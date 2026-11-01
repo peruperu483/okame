@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.20.0';
+var APP_VERSION = '0.21.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -47,7 +47,8 @@ var TABLES = {
       ['nomi', '飲み放題', 'n'], ['tanpin', '単品', 'n'], ['event', 'イベント', 'n'],
       ['openCash', '開店時の現金', 'n'], ['cashIn', '入金', 'n'], ['cashOut', '出金', 'n'], ['collected', '回収', 'n'],
       ['expectedCash', 'あるはずの現金', 'n'], ['countedCash', '数えた現金', 'n'], ['diff', '差額', 'n'],
-      ['trial', '試運転', 'b'], ['regular', '常連', 'n']
+      ['trial', '試運転', 'b'], ['regular', '常連', 'n'],
+      ['lateAdjust', 'あとから直した分', 'n'] // 締めたあとに売上を足した・直した分の、現金売上の増減（差額 = 数えた現金 − あるはずの現金。締めたときの差額 = 差額 + この値）
     ].concat(COMMON_TAIL)
   },
   // レジの出し入れ。種類は 入金／出金／回収（オーナーがレジから抜いた分）／小口から払う／小口からレジへ。
@@ -611,6 +612,10 @@ function upsert_(tableKey, ops, ctx) {
       results.push({ opId: op.opId, ok: false, code: 'forbidden' });
       return;
     }
+    if (tableKey === 'visits' && visitTooOld_(cur, data, ctx, op)) { // 直せる来客は、今月と先月まで（過ぎた日の売上を、店長があとから足す・直す）
+      results.push({ opId: op.opId, ok: false, code: 'too_old' });
+      return;
+    }
     if (hit) {
       var stale = !ctx.force && data.updatedAt && cur.updatedAt && Date.parse(data.updatedAt) < Date.parse(cur.updatedAt);
       var visitArrays = tableKey === 'visits' && ('extras' in data || 'pays' in data);
@@ -653,6 +658,20 @@ function upsert_(tableKey, ops, ctx) {
     appendRows_(t.sheet, fresh.map(function (r) { return toRow_(t, r, null); }), fresh.map(function () { return formats; }));
   }
   return results;
+}
+
+/** 直せる最初の日 ＝ 先月の1日（today は営業日 YYYY-MM-DD） */
+function lateEditStart_(today) {
+  var y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)) - 1;
+  if (m < 1) { y -= 1; m += 12; }
+  return y + '-' + pad2_(m) + '-01';
+}
+
+/** 来客の書き込みが、先月より前の日の記録に触れるか（その操作をした時刻の営業日で数える。店長でも直せない） */
+function visitTooOld_(cur, data, ctx, op) {
+  if (!ctx.settings) return false;
+  var start = lateEditStart_(serverBizDate_(ctx.settings, opContext_(ctx, op).at));
+  return [cur && cur.bizDate, data.bizDate].some(function (d) { return d && String(d).slice(0, 10) < start; });
 }
 
 /** IDを持つ要素の配列を、IDごとに合わせる（追加・受け取り）。消した印（del）は、一度付いたら外さない */

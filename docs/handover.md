@@ -23,13 +23,13 @@
 
 | もの | 版 | 確かめ方 |
 |---|---|---|
-| 画面（`v2/`） | **0.20.0**（公開中。`v2/sw.js` の `VERSION` = `v0.20.0`、`v2/config.js` の `APP_VERSION`） | https://peruperu483.github.io/okame/v2/sw.js を開いて `VERSION` を見る |
-| GAS（`gas/Code.gs`） | **0.20.0**（本物に貼り替え済み。2026-10-26 に確認） | GASのURL（`v2/config.js` の `GAS_URL`）の末尾に `?action=ping` を付けて開く → `"version"` |
+| 画面（`v2/`） | **0.21.0**（`v2/sw.js` の `VERSION` = `v0.21.0`、`v2/config.js` の `APP_VERSION`。公開したかは下の sw.js で確かめる） | https://peruperu483.github.io/okame/v2/sw.js を開いて `VERSION` を見る |
+| GAS（`gas/Code.gs`） | **0.21.0**（貼り替えが済んだかは ping で確かめる。0.20.0 のままのときは、過ぎた日の足す・直すの入口は出ない） | GASのURL（`v2/config.js` の `GAS_URL`）の末尾に `?action=ping` を付けて開く → `"version"` |
 | 許可の設定（`gas/appsscript.json`） | 2026-10-16 版（spreadsheets・script.container.ui・script.scriptapp・userinfo.email） | 変わったときだけ貼り替える |
 | ブランチ | 作業は `v2-dev`、公開は `main`（GitHub Pages）。2026-10-26 時点で、両方とも同じ（`c174d95`） | `git log --oneline -1 main v2-dev` |
 | テスト | `node --test test/*.test.mjs` → 130件すべて通る | GASか送信の仕組みを変えたら必ず通す |
 
-画面の版とGASの版は別々に数えています（たまたま今は同じ0.20.0）。
+画面の版とGASの版は別々に数えています（たまたま今は同じ0.21.0）。
 
 ### 0.13〜0.20 で足したもの（2026-10-16〜18）
 - 目標の欄（目標まで あと／確定だけだと あと、2色の棒）
@@ -126,6 +126,7 @@ GASを直したら、林に次を頼む（詳しくは [試運転の準備.md](�
 
 ### 直した（記録）
 - 予定の画面で、日付の欄のイベントの名前が縦に1文字ずつ折り返す → 2026-10-26 に公開して直した（0.20.0）
+- 過ぎた日の売上を、店長があとから足す・直す・取り消す → 2026-11-01 に作った（0.21.0。`v2/js/screens/lateedit.js`・calc.js の `lateVisitPatch` / `lateClosingPatch`）。店長モードのときだけ。直せるのは今月と先月まで（GASの `visitTooOld_` が、先月より前の来客の書き込みを `too_old` で断る）。足す・直す・取り消すたびに、その日の締めの売上の内訳・あるはずの現金・差額を計算し直し（数えた現金は変えない）、現金売上の増減を締めの列「あとから直した分」（`lateAdjust`）に積む。締め直すと0に戻る。操作履歴の種別：過ぎた日の売上を足す／直す／取り消す、締めを計算し直す（あとから直した分）
 
 ---
 

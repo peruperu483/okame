@@ -319,6 +319,96 @@ export function closingIsStale(closing, summary) {
   return n(closing.sales) !== summary.sales || n(closing.cash) !== summary.cash || n(closing.groups) !== summary.groups || n(closing.guests) !== summary.guests;
 }
 
+// ===== 過ぎた日の売上を、店長があとから足す・直す・取り消す =====
+// 直せる範囲は今月と先月まで。足す・直すと、その日の締めの売上の内訳は自動で計算し直す（数えた現金は変えない）。
+// 現金売上の増減は「あとから直した分」(lateAdjust) に積み、差額 = 数えた現金 − 新しいあるはずの現金
+
+export const LATE_VERSION = '0.21.0'; // 「あとから直した分」の列と、直せる範囲の判定を持つGASの版
+export const LATE_REASONS = ['打ち忘れ', '金額の間違い', '人数の間違い', '支払い方法の間違い', '二重に入れた', 'その他'];
+
+/** 直せる最初の日 ＝ 先月の1日（today は今日の営業日 YYYY-MM-DD） */
+export function lateEditStart(today) {
+  let y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)) - 1;
+  if (m < 1) { y -= 1; m += 12; }
+  return `${y}-${String(m).padStart(2, '0')}-01`;
+}
+/** 過ぎた日で、先月の1日以降か */
+export const inLateRange = (date, today) => !!date && date < today && date >= lateEditStart(today);
+
+/** 組の内容を、操作履歴に残す短い形にする（いつ・どの日の何を・いくら） */
+export function lateSnap(v) {
+  return { bizDate: v.bizDate, ...(v.no != null && v.no !== '' ? { no: n(v.no) } : {}), name: v.name || '', kind: v.kind, people: n(v.people), total: total(v), pays: livePays(v).map(p => ({ method: p.method, amount: n(p.amount) })) };
+}
+
+/**
+ * 過ぎた日の組を足す・直すときの保存内容を作る（足すとき v は null）
+ * input：{ kind, name, people, unit, total, pays: [{method, amount}], inAt }
+ * - 合計金額 = 基本の金額 + 追加・延長。追加・延長はそのまま残し、基本の金額を「合計 − 追加・延長」にする
+ * - 受け取りの合計は、合計金額と合っていること（退店した組なので）
+ * - 人数×単価と合計がずれていたら、単価は持たない（人数×単価の計算に上書きされないように）
+ * @returns {{ok: boolean, error?: string, patch?: object}}
+ */
+export function lateVisitPatch(v, input, s, mkId, nowStamp) {
+  const kind = v ? v.kind : input.kind;
+  const unitEv = !!v && isUnitEvent(v);
+  const people = Number(input.people);
+  const tot = Number(input.total);
+  const extras = v ? extrasTotal(v) : 0;
+  if (!KINDS.includes(kind)) return { ok: false, error: '種類を選んでください。' };
+  if (!Number.isInteger(people) || people < (unitEv ? 0 : 1)) return { ok: false, error: '人数を入れてください。' };
+  if (input.total === '' || input.total == null || !Number.isInteger(tot) || tot < 0) return { ok: false, error: '合計金額を入れてください（0円以上）。' };
+  if (tot < extras) return { ok: false, error: `合計金額が、追加・延長の合計（${yen(extras)}）より小さくなっています。` };
+  const pays = (input.pays || []).filter(p => p && !(p.amount === '' || p.amount == null));
+  for (const p of pays) {
+    if (!METHODS.includes(p.method)) return { ok: false, error: '支払い方法を選んでください。' };
+    if (!Number.isInteger(Number(p.amount)) || Number(p.amount) <= 0) return { ok: false, error: '受け取りの金額を入れてください。' };
+  }
+  const paid = pays.reduce((a, p) => a + Number(p.amount), 0);
+  if (paid !== tot) return { ok: false, error: paid < tot ? `受け取りがあと ${yen(tot - paid)} 足りません。` : `受け取りが ${yen(paid - tot)} 多いです。` };
+  const unit = Number(input.unit) || 0;
+  const hasUnit = kind === KIND_REGULAR || kind === KIND_EVENT;
+  if (v == null && kind === KIND_REGULAR && !(unit > 0)) return { ok: false, error: '常連は、1人の料金を選んでください。' };
+  if (v == null && kind === KIND_EVENT && !(unit > 0)) return { ok: false, error: 'イベントは、1人の単価を入れてください。' };
+  const consistent = hasUnit && unit > 0 && tot === people * unit + extras;
+  const patch = { name: String(input.name || '').trim(), people, base: tot - extras, total: tot };
+  if (kind === KIND_REGULAR) patch.unitPrice = consistent ? unit : '';
+  if (kind === KIND_EVENT) {
+    if (consistent) {
+      const adj = unitEv ? eventPeople(v) - n(v.basePeople) : 0; // −／＋で足し引きした人数
+      Object.assign(patch, { unitPrice: unit, basePeople: people - adj, people, base: people * unit });
+    } else Object.assign(patch, { unitPrice: '', basePeople: '' });
+  }
+  // 受け取り：同じなら触らない。違えば、前の受け取りに消した印を付けて、新しい受け取りを足す
+  const same = v && (() => {
+    const a = livePays(v).map(p => `${p.method}:${n(p.amount)}`).sort().join(',');
+    const b = pays.map(p => `${p.method}:${Number(p.amount)}`).sort().join(',');
+    return a === b;
+  })();
+  if (!same) {
+    const at = (v && v.outAt) || input.inAt || nowStamp;
+    patch.pays = [...markAllDeleted(v ? v.pays : []), ...pays.map(p => ({ id: mkId(), method: p.method, amount: Number(p.amount), at }))];
+  }
+  const finalPays = patch.pays || (v ? v.pays : []);
+  Object.assign(patch, methodSums(finalPays));
+  return { ok: true, patch };
+}
+
+/**
+ * 締めたあとに売上が変わったときの、締めの直し。売上の内訳を今の記録から計算し直し、
+ * あるはずの現金を現金売上の増減だけ動かして、差額を出し直す（数えた現金は変えない）。変わらなければ null
+ */
+export function lateClosingPatch(closing, sum) {
+  if (!closing) return null;
+  const keys = ['sales', 'guests', 'groups', 'cash', 'cashless', 'point', 'nomi', 'tanpin', 'event', 'regular'];
+  if (!keys.some(k => n(closing[k]) !== n(sum[k]))) return null;
+  const dCash = n(sum.cash) - n(closing.cash);
+  const expected = n(closing.expectedCash) + dCash;
+  return {
+    ...Object.fromEntries(keys.map(k => [k, n(sum[k])])),
+    expectedCash: expected, diff: n(closing.countedCash) - expected, lateAdjust: n(closing.lateAdjust) + dCash
+  };
+}
+
 // ===== 勤怠 =====
 export const ATT_FIXED = '固定';
 export const ATT_OTHER = '手打ち';

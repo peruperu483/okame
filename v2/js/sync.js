@@ -6,7 +6,7 @@ import { NetworkError } from './api.js';
 
 const BATCH = 50;
 // GASに断られたら送り直しても通らないもの
-const PERMANENT = new Set(['bad_table', 'bad_op', 'forbidden']);
+const PERMANENT = new Set(['bad_table', 'bad_op', 'forbidden', 'too_old']);
 
 /**
  * @param {{store: object, post: Function, getDeviceId: () => string, getMgrToken: () => string|null}} deps

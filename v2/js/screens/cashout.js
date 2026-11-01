@@ -15,7 +15,7 @@ const toNum = v => (v === '' || v == null ? '' : Number(v));
 
 /** GASが内訳を受け取れる版か（古いGASに送ると内訳が消えるため、それまでは前の入力のまま） */
 export const canUseLines = app => verGte(app.serverVersion, '0.18.0');
-function verGte(v, want) {
+export function verGte(v, want) {
   const a = String(v || '0').split('.').map(Number), b = want.split('.').map(Number);
   for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]; }
   return true;

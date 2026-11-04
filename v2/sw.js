@@ -1,11 +1,11 @@
 // 通信が切れてもアプリを開けるように、画面のファイルを端末に置いておく。
 // 画面のファイルを変えたら VERSION を上げる（上げないと古い画面が出続ける）。
 // GAS（script.google.com）への通信はここでは扱わない。
-const VERSION = 'v0.22.0';
+const VERSION = 'v0.23.0';
 const CACHE = 'okame-' + VERSION;
 const FILES = [
   './', './index.html', './config.js', './manifest.webmanifest', './css/app.css',
-  './js/app.js', './js/util.js', './js/bizday.js', './js/store.js', './js/api.js', './js/sync.js', './js/auth.js',
+  './js/app.js', './js/update.js', './js/util.js', './js/bizday.js', './js/store.js', './js/api.js', './js/sync.js', './js/auth.js',
   './js/calc.js', './js/ui.js',
   './js/screens/settings.js', './js/screens/pin.js', './js/screens/more.js', './js/screens/common.js',
   './js/screens/store.js', './js/screens/today.js', './js/screens/plan.js', './js/screens/ana.js',
@@ -13,8 +13,21 @@ const FILES = [
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'
 ];
 
+// ブラウザの控え（HTTPのキャッシュ）を通さずに取る。通すと、新しい版のなかに古いファイルが混ざることがある
+const fresh = () => FILES.map(f => new Request(f, { cache: 'reload' }));
+
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(fresh())).then(() => self.skipWaiting()));
+});
+
+// 画面から聞かれたら答える（js/update.js）：version＝この Service Worker の版／refetch＝画面のファイルを取り直す
+self.addEventListener('message', e => {
+  const port = e.ports && e.ports[0];
+  const type = e.data && e.data.type;
+  if (type === 'version') port?.postMessage(VERSION);
+  else if (type === 'refetch') {
+    e.waitUntil(caches.open(CACHE).then(c => c.addAll(fresh())).then(() => port?.postMessage(true), () => port?.postMessage(false)));
+  }
 });
 
 self.addEventListener('activate', e => {

@@ -52,8 +52,8 @@ button { cursor: pointer; }
   min-height: 100vh; min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--top-h) 1fr auto;
-  grid-template-areas: "top" "main" "nav";
+  grid-template-rows: var(--top-h) auto 1fr auto;
+  grid-template-areas: "top" "upd" "main" "nav";
 }
 .topbar {
   grid-area: top; position: sticky; top: 0; z-index: 10;
@@ -103,13 +103,24 @@ button { cursor: pointer; }
 @media (max-width: 520px) { .topbar .clock { display: none; } .topbar-day { display: none; } }
 
 .main { grid-area: main; min-width: 0; }
+/* 新しい版の帯（js/update.js）。押すと更新する */
+body.has-upd { --upd-h: 52px; }
+.upd-band {
+  grid-area: upd; position: sticky; top: var(--top-h); z-index: 9;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: var(--upd-h, 52px); padding: 8px 16px; border: none; border-radius: 0;
+  background: var(--accent); color: var(--accent-ink); font-size: 16px; font-weight: 700; text-align: center;
+}
+.upd-band::before { content: "↻"; font-size: 20px; line-height: 1; }
+.upd-band.waiting { background: var(--warn-bg); color: var(--warn); }
+.upd-band.waiting::before { content: "…"; }
 
 /* 横向きのタブレット：左に縦のナビ */
 @media (orientation: landscape) and (min-width: 800px) {
   .app {
     grid-template-columns: var(--nav-w) minmax(0, 1fr);
-    grid-template-rows: var(--top-h) 1fr;
-    grid-template-areas: "nav top" "nav main";
+    grid-template-rows: var(--top-h) auto 1fr;
+    grid-template-areas: "nav top" "nav upd" "nav main";
   }
   .topbar { padding: 0 24px; }
   .nav {
@@ -357,7 +368,7 @@ button { cursor: pointer; }
   .det-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (orientation: landscape) and (min-width: 800px) {
-  .page.store { height: calc(100dvh - var(--top-h)); padding: 20px; display: flex; }
+  .page.store { height: calc(100dvh - var(--top-h) - var(--upd-h, 0px)); padding: 20px; display: flex; }
   .store-grid { flex-direction: row; gap: 20px; flex: 1; min-height: 0; width: 100%; }
   .entry { width: 340px; flex-shrink: 0; overflow: auto; }
   .size-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }

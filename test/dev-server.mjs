@@ -39,7 +39,9 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/config.js' && !REAL) {
     res.writeHead(200, { 'Content-Type': 'text/javascript' });
-    res.end("export const GAS_URL = '/gas';\nexport const APP_VERSION = 'dev';\n");
+    // 版は v2/config.js のまま（sw.js の VERSION とずれると、新しい版の帯が出続ける）
+    const ver = (fs.readFileSync(path.join(ROOT, 'config.js'), 'utf8').match(/APP_VERSION = '([^']+)'/) || [])[1] || 'dev';
+    res.end(`export const GAS_URL = '/gas';\nexport const APP_VERSION = '${ver}';\n`);
     return;
   }
   const file = path.join(ROOT, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));

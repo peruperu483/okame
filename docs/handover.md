@@ -23,13 +23,13 @@
 
 | もの | 版 | 確かめ方 |
 |---|---|---|
-| 画面（`v2/`） | **0.22.0**（`v2/sw.js` の `VERSION` = `v0.22.0`、`v2/config.js` の `APP_VERSION`。公開したかは下の sw.js で確かめる） | https://peruperu483.github.io/okame/v2/sw.js を開いて `VERSION` を見る |
+| 画面（`v2/`） | **0.23.0**（`v2/sw.js` の `VERSION` = `v0.23.0`、`v2/config.js` の `APP_VERSION`。公開したかは下の sw.js で確かめる） | https://peruperu483.github.io/okame/v2/sw.js を開いて `VERSION` を見る |
 | GAS（`gas/Code.gs`） | **0.22.0**（本物は 2026-11-01 に 0.21.0 まで貼り替え済み。0.22.0 は設定「イベントの時間のボタン」を足しただけで、貼り替えるまでは2・3・4時間のボタンのまま使え、設定画面にその欄が出ない。0.20.0 のままのときは、過ぎた日の足す・直すの入口は出ない） | GASのURL（`v2/config.js` の `GAS_URL`）の末尾に `?action=ping` を付けて開く → `"version"` |
 | 許可の設定（`gas/appsscript.json`） | 2026-10-16 版（spreadsheets・script.container.ui・script.scriptapp・userinfo.email） | 変わったときだけ貼り替える |
 | ブランチ | 作業は `v2-dev`、公開は `main`（GitHub Pages）。2026-10-26 時点で、両方とも同じ（`c174d95`） | `git log --oneline -1 main v2-dev` |
-| テスト | `node --test test/*.test.mjs` → 130件すべて通る | GASか送信の仕組みを変えたら必ず通す |
+| テスト | `node --test test/*.test.mjs` → 148件すべて通る | GASか送信の仕組みを変えたら必ず通す |
 
-画面の版とGASの版は別々に数えています（たまたま今は同じ0.22.0）。
+画面の版とGASの版は別々に数えています（画面は0.23.0、GASは0.22.0。0.23.0 はGASを変えていない）。
 
 ### 0.13〜0.20 で足したもの（2026-10-16〜18）
 - 目標の欄（目標まで あと／確定だけだと あと、2色の棒）
@@ -55,7 +55,7 @@
 5. `v2-dev` にコミットして push。コミットの作者は `git -c user.name=peruperu483 -c user.email=peru.peru483@gmail.com commit ...`、最後に `Co-Authored-By:` の行
 6. 公開：`git checkout main && git merge --ff-only v2-dev && git push origin main v2-dev && git checkout v2-dev`
 7. 配信の確認：https://peruperu483.github.io/okame/v2/sw.js が新しい `VERSION` になるまで待つ（1〜数分）。画面のファイルが読めること（読み込みのエラーがないこと）を確かめる
-8. タブレットは、アプリを開き直すと新しい画面になる
+8. タブレットは、新しい版を見つけると上に緑の帯「新しい版があります。押すと更新します」が出る（0.23.0〜。`v2/js/update.js`）。アプリを開いた直後（裏から戻った直後）で、送信待ち0件・パネルも広げた卓も開いていない・まだ画面に触っていないときだけ、勝手に読み込み直す。0.22.0 以前から 0.23.0 へは帯が出ないので、前と同じくアプリを完全に終わらせて開き直す（1〜2回）
 
 ブラウザでの確かめは、ヘッドレスのEdge（CDP）を使う（このPCのヘッドレスChromeは Service Worker が入らない）。ヘッドレスのEdgeは、写真を撮る命令（`Page.captureScreenshot`）にときどき返事をしないので、時間切れにして撮り直す。
 
@@ -128,6 +128,7 @@ GASを直したら、林に次を頼む（詳しくは [試運転の準備.md](�
 - 予定の画面で、日付の欄のイベントの名前が縦に1文字ずつ折り返す → 2026-10-26 に公開して直した（0.20.0）
 - 過ぎた日の売上を、店長があとから足す・直す・取り消す → 2026-11-01 に作った（0.21.0。`v2/js/screens/lateedit.js`・calc.js の `lateVisitPatch` / `lateClosingPatch`）。店長モードのときだけ。直せるのは今月と先月まで（GASの `visitTooOld_` が、先月より前の来客の書き込みを `too_old` で断る）。足す・直す・取り消すたびに、その日の締めの売上の内訳・あるはずの現金・差額を計算し直し（数えた現金は変えない）、現金売上の増減を締めの列「あとから直した分」（`lateAdjust`）に積む。締め直すと0に戻る。操作履歴の種別：過ぎた日の売上を足す／直す／取り消す、締めを計算し直す（あとから直した分）
 - イベントの終わりの予定を「時間指定」（入店から2時間・3時間・4時間。設定 `eventDurations`・分）か「終了時刻」で選べるように → 2026-11-04 に作った（0.22.0。common.js の `eventEndPicker`、bizday.js の `eventEndAt`）。入店と卓の「直す」で同じ部品。予定に終了の時刻があれば、選んだとき「終了時刻」になる。保存するのは今までどおり終了予定（`endAt`）だけ（表の列は増えていない）
+- 新しい版を自動で読み込む → 2026-11-05 に作った（0.23.0。`v2/js/update.js`）。Service Worker に版を聞き（`sw.js` の message `version`）、画面の版（`APP_VERSION`）と違えば帯を出す。開いたとき・裏から戻ったとき・30分ごとに新しい版を探す。勝手に読み込み直すのは、開いた直後（90秒以内で、まだ画面に触っていない）・送信待ち0件・パネル（`.overlay`）も広げた卓（`.det-panel`）も開いていない・今の画面で何も押したり打ったりしていない、のすべてを満たすときだけ（`canAutoReload`）。1つの版につき1回まで（`updReloadedFor`。読み込み直しても版が変わらないときは、帯を押すとファイルを取り直す：message `refetch`）。送信待ちがあるときに押すと「送信が終わってから更新します」と出し、送り終わったら読み込み直す。Service Worker はファイルをブラウザの控えを通さずに取る（`cache: 'reload'`）。`sw.js` の `VERSION` と `config.js` の `APP_VERSION` がずれると帯が出続けるので、必ずそろえる（`test/update.test.mjs` が確かめる）
 
 ---
 

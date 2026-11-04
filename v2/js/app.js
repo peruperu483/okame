@@ -6,6 +6,7 @@ import { idbStore } from './store.js';
 import { createApi, ApiError, NetworkError } from './api.js';
 import { createSync } from './sync.js';
 import { createAuth } from './auth.js';
+import { createUpdater } from './update.js';
 import { renderPinGate, openPinSheet } from './screens/pin.js';
 import { renderMore } from './screens/more.js';
 import { renderStore } from './screens/store.js';
@@ -79,6 +80,13 @@ const MGR_ONLY_SETTINGS = ['managerFee', 'defaultWage'];
 
 let cleanup = null;
 let current = null;
+let touched = false; // 今の画面で何か押したり打ったりしたか（新しい版を勝手に読み込み直さないため。画面を切り替えると戻る）
+// 新しい版の帯（js/update.js）。入力の途中＝パネル（入店の直し・会計・レジから出す・締め直し・暗証番号など）か、広げた卓を開いている
+const updater = createUpdater({
+  version: APP_VERSION, sync, store,
+  isBusy: () => !!document.querySelector('.overlay, .det-panel'),
+  isTouched: () => touched
+});
 
 async function start() {
   app.deviceId = (await store.kvGet('deviceId')) || uuid();
@@ -98,7 +106,7 @@ function boot() {
   document.addEventListener('pointerdown', () => auth.touch(), { passive: true });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) auth.lock();
-    else { app.refreshSettings().catch(() => {}); sync.flush(); renderChrome(); }
+    else { app.refreshSettings().catch(() => {}); sync.flush(); renderChrome(); updater.opened(); }
   });
   window.addEventListener('online', () => sync.flush());
   window.addEventListener('hashchange', route);
@@ -127,11 +135,16 @@ function boot() {
         h('button', { class: 'sync-pill', id: 'sync-pill', onclick: openDevicePanel }),
         h('div', { class: 'mgr-band', id: 'mgr-band' }),
         h('div', { class: 'clock', id: 'clock' }))),
+    updater.band,
     h('nav', { class: 'nav', id: 'nav', 'aria-label': 'メニュー' }),
     h('main', { class: 'main', id: 'main' })
   );
+  const main = $('#main');
+  const touch = () => { touched = true; };
+  ['input', 'change', 'click'].forEach(t => main.addEventListener(t, touch, { capture: true, passive: true }));
   renderChrome();
   route();
+  updater.start();
   showHomeScreenTip();
   sync.refreshCounts();
   sync.flush();
@@ -201,6 +214,7 @@ function route() {
   if (typeof cleanup === 'function') cleanup();
   cleanup = null;
   current = screen.id;
+  touched = false;
   const main = $('#main');
   main.replaceChildren();
   main.scrollTop = 0;

@@ -60,3 +60,25 @@ export function timeOnBizDay(bizDate, hhmm, cutoffHour = 12) {
   const date = hour < cutoffHour ? addDays(bizDate, 1) : bizDate;
   return `${date}T${String(hour).padStart(2, '0')}:${m[2]}:00+09:00`;
 }
+
+// ===== イベントの終わりの予定（時間で決める／終了時刻で決める）=====
+export const EVENT_DURATIONS = [120, 180, 240]; // 設定 eventDurations（分）がないとき（古いGAS）の時間のボタン
+
+/** 150 → 2時間30分 */
+export function fmtDuration(min) {
+  const m = Math.round(Number(min) || 0), hr = Math.floor(m / 60), r = m % 60;
+  return (hr ? `${hr}時間` : '') + (r ? `${r}分` : '') || '0分';
+}
+
+/**
+ * イベントの終了の予定（ISO）。決められないときは null
+ * - choice.mode === 'dur'：入店（inAtIso）から choice.minutes 分
+ * - choice.mode === 'end'：その営業日の時刻 choice.end（HH:MM。切り替え時刻より前は翌日）
+ */
+export function eventEndAt(choice, inAtIso, bizDate, cutoffHour = 12) {
+  if (!choice) return null;
+  if (choice.mode === 'end') return timeOnBizDay(bizDate, choice.end, cutoffHour);
+  const m = Number(choice.minutes), t = Date.parse(inAtIso);
+  if (!(m > 0) || Number.isNaN(t)) return null;
+  return nowIso(new Date(t + m * 60e3));
+}

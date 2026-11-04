@@ -1,7 +1,7 @@
 // 店内：左に入店、右に店内の組（通常／イベントの2ページ）。
 // カードをタップすると、その卓が店内の欄いっぱいに広がる（左が追加、右が会計）
 import { h, put, toast, uuid, yen } from '../util.js';
-import { nowIso, fmtHM, timeOnBizDay, addDays } from '../bizday.js';
+import { nowIso, fmtHM, addDays, eventEndAt } from '../bizday.js';
 import {
   KIND_NOMI, KIND_TANPIN, KIND_EVENT, KIND_REGULAR, REGULAR_PRICES, regularUnit, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT, EXTRA_PEOPLE,
   isUnitEvent, eventPeople, unitFix, unitLabel,
@@ -9,7 +9,7 @@ import {
   timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel
 } from '../calc.js';
 import { openSheet, pickReason, stepper } from '../ui.js';
-import { unitPicker } from './common.js';
+import { unitPicker, eventEndPicker } from './common.js';
 
 const BADGE = { lo: 'ラストオーダー', over: '時間超過' };
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -20,7 +20,7 @@ export function renderStore(root, app) {
   const S = () => app.settings;
   const day = () => app.bizDate();
   const st = {
-    size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evEnd: '', evId: '', err: '',
+    size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evMode: 'dur', evMin: '', evEnd: '', evId: '', err: '', // evMode：イベントの終わりを「時間指定」(dur)か「終了時刻」(end)か
     pane: 0, all: [], events: [], openId: null, busy: false,
     det: null // 広げた卓の入力（追加の金額・直している追加・支払い方法・受け取る金額・お知らせ）
   };
@@ -72,15 +72,19 @@ export function renderStore(root, app) {
       todays.length ? [h('div', { class: 'lab' }, '今日の予定から選ぶ'),
         todays.map(e => h('button', {
           class: 'btn pick left' + (st.evId === e.id ? ' on' : ''), onclick: () => {
-            Object.assign(st, { evId: e.id, name: e.title || '', evUnit: Number(e.unitPrice) > 0 ? Number(e.unitPrice) : st.evUnit, evEnd: e.endTime || '', size: Number(e.people) || st.size, err: '' });
+            Object.assign(st, { evId: e.id, name: e.title || '', evUnit: Number(e.unitPrice) > 0 ? Number(e.unitPrice) : st.evUnit, size: Number(e.people) || st.size, err: '' });
+            if (e.endTime) Object.assign(st, { evMode: 'end', evEnd: e.endTime }); // 予定に終わりの時刻があれば、終了時刻にする
             nameInput.value = st.name;
             paintEntry();
           }
         }, [e.startTime, e.title, e.people ? e.people + '名' : ''].filter(Boolean).join('　')))] : null,
       h('div', { class: 'lab' }, '1人の単価（金額＝人数×単価）'),
       unitPicker(app, st.evUnit, u => { st.evUnit = u; st.err = ''; enterBtn.textContent = `入店する（${st.size}名・${yen(entryAmount())}）`; }),
-      lab('終了の予定時刻（イベントごとに違う）', 'evEnd'),
-      h('input', { id: 'evEnd', class: 'input', type: 'time', value: st.evEnd, oninput: e => { st.evEnd = e.target.value; st.err = ''; } }));
+      h('div', { class: 'lab' }, '終わりの予定（イベントごとに違う）'),
+      eventEndPicker(app, {
+        mode: st.evMode, minutes: st.evMin, end: st.evEnd, bizDate: day,
+        onChange: c => { Object.assign(st, { evMode: c.mode, evMin: c.minutes, evEnd: c.end, err: '' }); errEl.textContent = ''; }
+      }));
   }
 
   function pickMany() {
@@ -97,8 +101,9 @@ export function renderStore(root, app) {
     if (st.busy) return; // 2回押し防止
     if (!editable() && !(await app.requireMgr('この営業日の記録は、店長だけが入れられます。店長の暗証番号を押してください。'))) return;
     const isEv = st.kind === KIND_EVENT;
-    const endAt = isEv ? timeOnBizDay(day(), st.evEnd, S().bizDayCutoffHour ?? 12) : '';
-    if (isEv && (!(Number(st.evUnit) > 0) || !endAt)) { st.err = 'イベントは、1人の単価と終了の予定時刻を入れてください。'; return paintEntry(); }
+    const inAt = nowIso();
+    const endAt = isEv ? eventEndAt({ mode: st.evMode, minutes: st.evMin, end: st.evEnd }, inAt, day(), S().bizDayCutoffHour ?? 12) : '';
+    if (isEv && (!(Number(st.evUnit) > 0) || !endAt)) { st.err = st.evMode === 'dur' ? 'イベントは、1人の単価と時間（2時間など）を選んでください。' : 'イベントは、1人の単価と終了の予定時刻を入れてください。'; return paintEntry(); }
     const isReg = st.kind === KIND_REGULAR;
     if (isReg && !(Number(st.regUnit) > 0)) { st.err = '常連は、1人の料金を選んでください。'; return paintEntry(); }
     st.busy = true;
@@ -106,12 +111,12 @@ export function renderStore(root, app) {
     const base = entryAmount();
     const v = {
       bizDate: day(), no: nextNo(st.all.filter(x => x.bizDate === day())), name: st.name.trim(), people: st.size, kind: st.kind,
-      inAt: nowIso(), endAt, status: ST_IN, base, extras: [], pays: [], total: base, cash: 0, cashless: 0, point: 0,
+      inAt, endAt, status: ST_IN, base, extras: [], pays: [], total: base, cash: 0, cashless: 0, point: 0,
       eventId: isEv ? st.evId : '', trial: app.isTrial(day()),
       ...(isEv ? { unitPrice: Number(st.evUnit), basePeople: st.size } : {}),
       ...(isReg ? { unitPrice: Number(st.regUnit) } : {})
     };
-    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evEnd: '', evId: '', err: '' });
+    Object.assign(st, { size: 2, kind: KIND_NOMI, name: '', evUnit: '', regUnit: '', evMin: '', evEnd: '', evId: '', err: '' }); // 終わりの決め方（時間指定／終了時刻）は、前に選んだほうのまま
     nameInput.value = '';
     paintEntry();
     await app.sync.save('visits', uuid(), v);
@@ -436,7 +441,7 @@ export function renderStore(root, app) {
     const unit = unitEv ? unitPicker(app, v.unitPrice) : null;
     const isReg = v.kind === KIND_REGULAR;
     const regUnit = isReg ? unitPicker(app, regularUnit(v), null, regPrices()) : null;
-    const evEnd = h('input', { class: 'input', type: 'time', value: v.endAt ? fmtHM(v.endAt) : '' });
+    const evEnd = isEv ? eventEndPicker(app, { mode: 'end', end: v.endAt ? fmtHM(v.endAt) : '', bizDate: () => v.bizDate, baseAt: () => v.inAt }) : null; // 直すときも、入店から何時間か・終了時刻のどちらでも
     openSheet(close => [
       h('h2', {}, `${label(v)}を直す`),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '名前'), name),
@@ -445,7 +450,7 @@ export function renderStore(root, app) {
       isReg ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の料金（金額＝人数×料金）'), regUnit) : null,
       isEv ? [unitEv ? h('div', { class: 'field' }, h('div', { class: 'field-label' }, '1人の単価（金額＝人数×単価）'), unit)
         : h('div', { class: 'field' }, h('div', { class: 'field-label' }, '金額（団体の合計）'), evAmt),
-        h('div', { class: 'field' }, h('div', { class: 'field-label' }, '終了の予定時刻'), evEnd)] : null,
+        h('div', { class: 'field' }, h('div', { class: 'field-label' }, '終わりの予定'), evEnd)] : null,
       h('div', { class: 'btn-row' },
         h('button', {
           class: 'btn btn-danger', onclick: async () => {
@@ -468,14 +473,14 @@ export function renderStore(root, app) {
               Object.assign(patch, { unitPrice: u, base: baseAmount(KIND_REGULAR, patch.people, S(), u) });
             }
             if (isEv) {
-              const endAt = timeOnBizDay(v.bizDate, evEnd.value, S().bizDayCutoffHour ?? 12);
+              const endAt = evEnd.endAt();
               if (unitEv) {
                 const u = Number(unit.value());
-                if (!(u > 0) || !endAt) { toast('1人の単価と終了の予定時刻を入れてください', 'err'); return; }
+                if (!(u > 0) || !endAt) { toast('1人の単価と終わりの予定（時間か終了時刻）を入れてください', 'err'); return; }
                 const adj = eventPeople(v) - Number(v.basePeople); // −／＋で足し引きした人数
                 Object.assign(patch, { unitPrice: u, basePeople: patch.people - adj, base: patch.people * u, endAt });
               } else {
-                if (!(Number(evAmt.value) > 0) || !endAt) { toast('金額と終了の予定時刻を入れてください', 'err'); return; }
+                if (!(Number(evAmt.value) > 0) || !endAt) { toast('金額と終わりの予定（時間か終了時刻）を入れてください', 'err'); return; }
                 Object.assign(patch, { base: Number(evAmt.value), endAt });
               }
             }

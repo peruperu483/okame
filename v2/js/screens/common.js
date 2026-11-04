@@ -1,6 +1,7 @@
 // 予定・勤怠・仕入れ・固定費・分析で使い回す小物
 import { h, put, yen } from '../util.js';
-import { dowOf } from '../bizday.js';
+import { dowOf, nowIso, fmtHM, fmtDuration, eventEndAt, EVENT_DURATIONS } from '../bizday.js';
+import { seg } from '../ui.js';
 
 /** 2026-11-05 → 11/5（木） */
 export const fmtMD = ymd => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}（${dowOf(ymd)}）`;
@@ -109,3 +110,36 @@ export function unitPicker(app, value, onChange, prices) {
 }
 
 export const msgBox = (text, bad) => (text ? h('div', { class: 'pay-msg ' + (bad ? 'bad' : 'good'), role: 'status' }, text) : null);
+
+/**
+ * イベントの終わりの決め方：「時間指定」（2時間・3時間・4時間のボタン。設定 eventDurations）か「終了時刻」（時刻の欄）
+ * el.value() で { mode: 'dur'|'end', minutes, end }。baseAt()：時間指定のときの始まり（入店の時刻。入店の前は今）
+ */
+export function eventEndPicker(app, { mode = 'dur', minutes = '', end = '', bizDate, baseAt = () => nowIso(), onChange } = {}) {
+  const durs = (Array.isArray(app.settings?.eventDurations) && app.settings.eventDurations.length ? app.settings.eventDurations : EVENT_DURATIONS).map(Number).filter(m => m > 0);
+  const cur = { mode: mode === 'end' ? 'end' : 'dur', minutes, end };
+  const MODES = ['時間指定', '終了時刻'];
+  const el = h('div', { class: 'end-pick' });
+  const body = h('div', { class: 'end-body' });
+  const note = h('div', { class: 'small muted2 end-note', 'aria-live': 'polite' });
+  const changed = () => { paintNote(); onChange?.(cur); };
+  function paintNote() {
+    const at = eventEndAt(cur, baseAt(), bizDate(), app.settings?.bizDayCutoffHour ?? 12);
+    note.textContent = !at ? (cur.mode === 'dur' ? '時間を選んでください' : '終わる時刻を入れてください')
+      : cur.mode === 'dur' ? `終了 ${fmtHM(at)} の予定（入店から${fmtDuration(cur.minutes)}）` : `終了 ${fmtHM(at)} の予定`;
+  }
+  function paintBody() {
+    put(body, cur.mode === 'dur'
+      ? h('div', { class: 'grid3' }, durs.map(m => h('button', {
+        type: 'button', class: 'btn pick' + (Number(cur.minutes) === m ? ' on' : ''), 'aria-pressed': String(Number(cur.minutes) === m),
+        onclick: () => { cur.minutes = m; paintBody(); changed(); }
+      }, fmtDuration(m))))
+      : h('input', { class: 'input', type: 'time', value: cur.end, 'aria-label': '終了の予定時刻', oninput: e => { cur.end = e.target.value; changed(); } }));
+  }
+  el.append(seg(MODES, MODES[cur.mode === 'end' ? 1 : 0], o => { cur.mode = o === MODES[1] ? 'end' : 'dur'; paintBody(); changed(); }, { size: 'lg' }), body, note);
+  paintBody();
+  paintNote();
+  el.value = () => ({ ...cur });
+  el.endAt = () => eventEndAt(cur, baseAt(), bizDate(), app.settings?.bizDayCutoffHour ?? 12);
+  return el;
+}

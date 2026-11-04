@@ -578,3 +578,8 @@ button { cursor: pointer; }
 .late-pays .lp-method { flex: 0 0 9em; }
 .late-pays .lp-amt { flex: 1 1 auto; min-width: 0; }
 .late-status { margin: 12px 0; padding: 10px 12px; background: var(--bg3); border-radius: var(--radius); }
+
+/* イベントの終わりの予定：時間で決める／終了時刻で決める */
+.end-pick { display: flex; flex-direction: column; gap: 8px; }
+.end-pick .seg { width: 100%; }
+.end-note { min-height: 1.4em; }

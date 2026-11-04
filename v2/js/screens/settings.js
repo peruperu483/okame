@@ -1,6 +1,7 @@
 // 設定画面。開くたびに店長の暗証番号（照合はGAS）。
 import { h, put, toast, uuid, yen } from '../util.js';
 import { monthLabel } from './common.js';
+import { fmtDuration, EVENT_DURATIONS } from '../bizday.js';
 import { renderPinGate } from './pin.js';
 
 const STAFF_TABLES = [
@@ -77,7 +78,11 @@ function renderForm(root, app) {
 
     card('入店の料金のボタン',
       priceListEditor('常連の1人の料金', draft, 'regularPrices', [1500, 2000, 2500], dirty, '入店で「常連」を選んだときのボタン。金額＝1人の料金×人数。ほかの金額は入店のときに手打ちできます。'),
-      priceListEditor('イベントの1人の単価', draft, 'eventUnitPrices', [3000, 4000, 5000], dirty, '入店と予定で、イベントを選んだときのボタン。')),
+      priceListEditor('イベントの1人の単価', draft, 'eventUnitPrices', [3000, 4000, 5000], dirty, '入店と予定で、イベントを選んだときのボタン。'),
+      Array.isArray(app.settings.eventDurations) // GASが 0.22.0 になってから（古いGASには保存できないため）
+        ? priceListEditor('イベントの時間のボタン', draft, 'eventDurations', EVENT_DURATIONS, dirty, '入店でイベントの「時間指定」を選んだときのボタン。終わりの予定＝入店の時刻＋この時間。半端な時間は「終了時刻」で入れられます。',
+          { fmt: fmtDuration, placeholder: '足す時間（例：2.5 で2時間30分）', parse: v => Math.round(Number(v) * 60), step: '0.5' })
+        : null),
 
     card('延長', h('p', { class: 'help' }, '料金と時間が決まったら足してください。会計のときに選べるようになります。'),
       extensionsEditor(draft, dirty)),
@@ -217,15 +222,17 @@ function listEditor(label, draft, key, dirty) {
 }
 
 /** 料金のボタンの金額（円）。小さい順に並べる */
-function priceListEditor(label, draft, key, fallback, dirty, help) {
+/** 金額（や時間）のボタンの一覧。opts：fmt（表示）・placeholder・parse（打った値 → 保存する整数）・step（時間は0.5きざみ） */
+function priceListEditor(label, draft, key, fallback, dirty, help, { fmt = yen, placeholder = '足す金額（円）', parse = Number, step } = {}) {
   if (!Array.isArray(draft[key])) draft[key] = fallback.slice();
   const wrap = h('div', { class: 'chips' });
-  const input = h('input', { class: 'input num', type: 'number', inputmode: 'numeric', placeholder: '足す金額（円）' });
+  const input = h('input', { class: 'input num', type: 'number', inputmode: step ? 'decimal' : 'numeric', placeholder, ...(step ? { step, min: step } : {}) });
   const paint = () => wrap.replaceChildren(...draft[key].map((v, i) =>
-    h('span', { class: 'chip' }, yen(v),
-      h('button', { class: 'chip-x', 'aria-label': yen(v) + 'を消す', onclick: () => { draft[key].splice(i, 1); paint(); dirty(); } }, '×'))));
+    h('span', { class: 'chip' }, fmt(v),
+      h('button', { class: 'chip-x', 'aria-label': fmt(v) + 'を消す', onclick: () => { draft[key].splice(i, 1); paint(); dirty(); } }, '×'))));
   const add = () => {
-    const v = Number(input.value);
+    if (input.value === '') return;
+    const v = parse(input.value);
     if (!Number.isInteger(v) || v <= 0 || draft[key].includes(v)) return;
     draft[key].push(v);
     draft[key].sort((a, b) => a - b);

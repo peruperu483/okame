@@ -6,7 +6,8 @@ import {
   KIND_NOMI, KIND_TANPIN, KIND_EVENT, KIND_REGULAR, REGULAR_PRICES, regularUnit, KINDS, METHODS, ST_IN, ST_OUT, ST_DEL, EXTRA_ADD, EXTRA_EXT, EXTRA_PEOPLE,
   isUnitEvent, eventPeople, unitFix, unitLabel,
   nextNo, label, baseAmount, extrasTotal, total, paidTotal, remaining, overpaid, methodSums, receive,
-  timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel
+  timeState, timeText, liveExtras, livePays, markDeleted, extensionExtra, extraLabel,
+  ORDER_KINDS, ORDER_OTHER, orderPrices, orderExtra
 } from '../calc.js';
 import { openSheet, pickReason, stepper } from '../ui.js';
 import { unitPicker, eventEndPicker } from './common.js';
@@ -211,7 +212,7 @@ export function renderStore(root, app) {
   function openDetail(id, cardEl) {
     if (panel) return;
     st.openId = id;
-    st.det = { addAmt: '', editId: null, method: '現金', payAmt: '', msg: '', bad: false };
+    st.det = { cat: null, name: '', addAmt: '', editId: null, method: '現金', payAmt: '', msg: '', bad: false };
     back = h('div', { class: 'det-back', onclick: closeDetail });
     panel = h('div', { class: 'det-panel', role: 'dialog' });
     area.append(back, panel);
@@ -280,7 +281,7 @@ export function renderStore(root, app) {
       oninput: e => { d.addAmt = e.target.value; }
     });
     const extras = liveExtras(v).filter(x => x.type !== EXTRA_PEOPLE).map(x => h('div', { class: 'xrow' + (d.editId === x.id ? ' editing' : '') },
-      h('span', { class: 'xlabel' }, x.type === EXTRA_EXT ? `${extraLabel(x)}　${yen(x.amount)}` : yen(x.amount), d.editId === x.id ? '　← 直している' : ''),
+      h('span', { class: 'xlabel' }, `${extraLabel(x)}　${yen(x.amount)}`, d.editId === x.id ? '　← 直している' : ''),
       x.type === EXTRA_EXT
         ? h('button', { class: 'btn btn-xs', onclick: () => pickExtension(v, x) }, '人数を直す')
         : h('button', { class: 'btn btn-xs', onclick: () => { d.editId = x.id; d.addAmt = String(x.amount); paintDetail(); } }, '直す'),
@@ -288,14 +289,35 @@ export function renderStore(root, app) {
     const exts = S().extensions || [];
     const addBox = h('div', { class: 'det-box' },
       h('h3', {}, '追加'),
-      extras.length ? h('div', { class: 'xlist' }, extras) : null,
-      h('div', { class: 'quick' }, (S().quickAdds || [500, 800, 1000]).map(a =>
-        h('button', { class: 'btn', onclick: () => addExtra(v, a) }, '+' + yen(a)))),
-      h('div', { class: 'inline-add' }, addInput,
-        h('button', { class: 'btn btn-primary', onclick: () => addCustom(v) }, d.editId ? '直す' : '足す')),
-      d.editId ? h('button', { class: 'btn btn-sm', onclick: () => { d.editId = null; d.addAmt = ''; paintDetail(); } }, '直すのをやめる') : null,
+      d.editId ? editBox() : orderBox(), // 種類のボタンはいつも上（足したものが増えても位置が変わらない）
       exts.length && (v.kind === KIND_NOMI || v.kind === KIND_REGULAR) ? [h('div', { class: 'lab' }, '延長'),
-        h('div', { class: 'quick' }, exts.map(x => h('button', { class: 'btn', onclick: () => pickExtension(v, null, x) }, `${x.label}（1人 ${yen(x.price)}）`)))] : null);
+        h('div', { class: 'quick' }, exts.map(x => h('button', { class: 'btn', onclick: () => pickExtension(v, null, x) }, `${x.label}（1人 ${yen(x.price)}）`)))] : null,
+      extras.length ? [h('div', { class: 'lab' }, '足したもの'), h('div', { class: 'xlist' }, extras)] : null);
+
+    /** 追加：種類を押す → その種類の金額のボタンと手打ち（金額を押すと卓に足す。種類は毎回選ぶ） */
+    function orderBox() {
+      const kinds = h('div', { class: 'order-kinds' }, ORDER_KINDS.map(k => h('button', {
+        class: 'btn pick' + (d.cat === k ? ' on' : ''), 'aria-pressed': String(d.cat === k),
+        onclick: () => { d.cat = d.cat === k ? null : k; d.addAmt = ''; paintDetail(); }
+      }, k)));
+      if (!d.cat) return [kinds, h('div', { class: 'fine' }, '種類を押すと、金額のボタンが出ます。')];
+      const prices = orderPrices(S(), d.cat);
+      return [kinds,
+        d.cat === ORDER_OTHER ? h('input', {
+          class: 'input', type: 'text', maxlength: 20, 'aria-label': 'その他の名前', placeholder: '名前（空なら「その他」）', value: d.name,
+          oninput: e => { d.name = e.target.value; }
+        }) : null,
+        prices.length ? h('div', { class: 'quick' }, prices.map(a =>
+          h('button', { class: 'btn', onclick: () => addExtra(v, a) }, '+' + yen(a)))) : null,
+        h('div', { class: 'inline-add' }, addInput, h('button', { class: 'btn btn-primary', onclick: () => addCustom(v) }, '足す'))];
+    }
+    /** 足した追加の金額を直す（種類はそのまま） */
+    function editBox() {
+      const x = liveExtras(v).find(e => e.id === d.editId);
+      return [h('div', { class: 'lab' }, `${x ? extraLabel(x) : '追加'}の金額を直す`),
+        h('div', { class: 'inline-add' }, addInput, h('button', { class: 'btn btn-primary', onclick: () => addCustom(v) }, '直す')),
+        h('button', { class: 'btn btn-sm', onclick: () => { d.editId = null; d.addAmt = ''; paintDetail(); } }, '直すのをやめる')];
+    }
 
     // --- 会計 ---
     const payInput = h('input', {
@@ -338,11 +360,15 @@ export function renderStore(root, app) {
 
   // --- 追加の操作 ---
   async function addExtra(v, amount) {
+    if (!st.det?.cat) return;
+    const { cat, name } = st.det; // 読み直しを待つあいだに変わらないよう、先に写す
     v = await liveVisit(v);
     if (!v) return;
     if (!(Number(amount) > 0)) return;
-    st.det.addAmt = '';
-    await saveVisit(v, { extras: [...(v.extras || []), { id: uuid(), type: EXTRA_ADD, amount: Number(amount), at: nowIso() }] });
+    const x = { id: uuid(), ...orderExtra(cat, amount, name), at: nowIso() };
+    Object.assign(st.det, { cat: null, name: '', addAmt: '' }); // 種類は毎回選ぶ（保存で描き直す前に戻す）
+    toast(`${extraLabel(x)} ${yen(x.amount)} を足しました`);
+    await saveVisit(v, { extras: [...(v.extras || []), x] });
   }
 
   async function addCustom(v) {
@@ -355,7 +381,8 @@ export function renderStore(root, app) {
     const extras = (v.extras || []).map(x => (x.id === d.editId ? { ...x, amount: amt } : x));
     d.editId = null;
     d.addAmt = '';
-    await saveVisit(v, { extras }, { type: '追加を直す', reason: '', before: { amount: before?.amount }, after: { amount: amt } });
+    const what = before ? extraLabel(before) : '';
+    await saveVisit(v, { extras }, { type: '追加を直す', reason: '', before: { label: what, amount: before?.amount }, after: { label: what, amount: amt } });
   }
 
   async function delExtra(v, x) {

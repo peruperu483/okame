@@ -33,6 +33,10 @@ export const LINE_KINDS = [LINE_BUY, LINE_STAFF, LINE_PETTY, LINE_BACK];
 export const EXTRA_ADD = '追加';
 export const EXTRA_EXT = '延長';
 export const EXTRA_PEOPLE = '人数'; // イベントの卓の −／＋（delta：±1。金額は0で、基本の金額＝人数×単価を計算し直す）
+// 卓の追加の種類（注文の種類。追加の記録の cat）。前の版の追加（種類なし）は「その他」として数える
+export const ORDER_OTHER = 'その他';
+export const ORDER_KINDS = ['キャストドリンク', 'ビール', '日本酒', 'その他飲食', ORDER_OTHER];
+export const ORDER_PRICES = [500, 800, 1000]; // 設定がないとき（古いGAS）の金額のボタン
 
 const n = v => Number(v) || 0;
 const yen = v => '¥' + Math.round(n(v)).toLocaleString('ja-JP');
@@ -140,8 +144,40 @@ export function extensionExtra(x, count) {
   return { type: EXTRA_EXT, label: x.label, unit: n(x.price), count: c, amount: n(x.price) * c, minutes: n(x.minutes) };
 }
 
-/** 追加・延長の明細の名前：「延長2時間 ×3人」 */
+/** 追加の種類。前の版の追加（種類なし）・知らない種類は「その他」 */
+export function orderKind(x) {
+  return ORDER_KINDS.includes(x?.cat) ? x.cat : ORDER_OTHER;
+}
+
+/** その種類の金額のボタン（設定 orderPrices。GASが古くて設定がないときは、前の追加のボタン quickAdds） */
+export function orderPrices(s, kind) {
+  const p = s?.orderPrices?.[kind];
+  if (Array.isArray(p)) return p;
+  return Array.isArray(s?.quickAdds) ? s.quickAdds : ORDER_PRICES;
+}
+
+/** 卓に足す追加。名前は「その他」のときだけ（空なら名前なし＝明細は「その他」） */
+export function orderExtra(kind, amount, name = '') {
+  const cat = ORDER_KINDS.includes(kind) ? kind : ORDER_OTHER;
+  const nm = cat === ORDER_OTHER ? String(name || '').trim().slice(0, 20) : '';
+  return { type: EXTRA_ADD, cat, ...(nm ? { name: nm } : {}), amount: n(amount) };
+}
+
+/** 精算済みの組の追加を、種類ごとに数える：{ 種類: { amount, count } }（取り消した追加は数えない） */
+export function orderSums(visits) {
+  const out = Object.fromEntries(ORDER_KINDS.map(k => [k, { amount: 0, count: 0 }]));
+  (visits || []).filter(v => v.status === ST_OUT).forEach(v => liveExtras(v).forEach(x => {
+    if (x.type !== EXTRA_ADD) return;
+    const o = out[orderKind(x)];
+    o.amount += n(x.amount);
+    o.count += 1;
+  }));
+  return out;
+}
+
+/** 追加・延長の明細の名前：「ビール」「その他」「花束」（その他で名前を入れたとき）「延長2時間 ×3人」 */
 export function extraLabel(x) {
+  if (x.type === EXTRA_ADD) return orderKind(x) === ORDER_OTHER ? (x.name || ORDER_OTHER) : x.cat;
   if (x.type !== EXTRA_EXT) return '追加';
   return `${x.label || '延長'}` + (n(x.count) > 0 ? ` ×${n(x.count)}人` : '');
 }

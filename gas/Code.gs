@@ -6,7 +6,7 @@
  * - 画面を直してもGASを貼り替えなくて済むように、記録は「表の名前とID」で汎用に扱う
  */
 
-var APP_VERSION = '0.22.0';
+var APP_VERSION = '0.23.0';
 var TZ = 'Asia/Tokyo';
 
 // ===== 表の定義 =====
@@ -164,6 +164,8 @@ var DEFAULT_SETTINGS = {
   eventUnitPrices: [3000, 4000, 5000], // イベントの1人の単価のボタン（予定と入店）
   regularPrices: [1500, 2000, 2500], // 常連の1人の料金のボタン（入店）。金額＝1人の料金×人数
   eventDurations: [120, 180, 240], // イベントの入店で「時間指定」のボタン（分）。終わりの予定＝入店の時刻＋この時間
+  // 卓の追加の金額のボタン（種類ごと）。保存するまでは、どの種類も前の追加のボタン（quickAdds）と同じ（getSettings_）
+  orderPrices: { 'キャストドリンク': [500, 800, 1000], 'ビール': [500, 800, 1000], '日本酒': [500, 800, 1000], 'その他飲食': [500, 800, 1000], 'その他': [500, 800, 1000] },
   mgrIdleMinutes: 10, // 店長モード：何もしないまま、この分数たったらバイトの画面に戻る（画面側で数える。暗証番号の照合と店長の判定はGAS）
   trialStartDate: '2026-10-16' // 試運転を始めた日。この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに出す（集計には入れない）
 };
@@ -199,6 +201,7 @@ var SETTING_LABELS = {
   eventUnitPrices: 'イベントの1人の単価のボタン（円）',
   regularPrices: '常連の1人の料金のボタン（円）',
   eventDurations: 'イベントの時間のボタン（分。入店で「時間指定」を選んだとき）',
+  orderPrices: '卓の追加の金額のボタン（種類 → 円）',
   mgrIdleMinutes: '店長モードが自動で終わるまでの時間（分。何もしないまま）',
   trialStartDate: '試運転を始めた日（この日から運用開始日の前日までのアプリの記録を「10月（アプリ）」のタブに見るためだけに出す）'
 };
@@ -389,8 +392,9 @@ function ensureSettingsSheet_(ss) {
   sh.getRange(1, 1, 1, 4).setFontWeight('bold');
   sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), 4).setNumberFormat('@');
   var stored = readSettingsRows_(sh);
+  var now = getSettings_(); // 足す項目の初期値（卓の追加の金額のボタンは、今の追加のボタンから作る）
   var add = Object.keys(DEFAULT_SETTINGS).filter(function (k) { return !(k in stored.map); }).map(function (k) {
-    return [k, SETTING_LABELS[k] || '', JSON.stringify(DEFAULT_SETTINGS[k]), nowIso_()];
+    return [k, SETTING_LABELS[k] || '', JSON.stringify(now[k]), nowIso_()];
   });
   if (add.length) appendRows_(sh, add, add.map(function () { return ['@', '@', '@', '@']; }));
   protect_(sh);
@@ -2353,6 +2357,11 @@ function monthOf_(d) { return String(d || '').slice(0, 7); }
 function prevMonth_(m) { var p = m.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 2, 1)).toISOString().slice(0, 7); }
 function counted_(d, goLive) { d = String(d || ''); return !goLive || d >= goLive.slice(0, Math.min(10, d.length)); }
 
+// 卓の追加の種類（画面の calc.js の ORDER_KINDS と同じ）。追加の記録の cat。種類のない前の版の追加は「その他」
+var ORDER_KINDS = ['キャストドリンク', 'ビール', '日本酒', 'その他飲食', 'その他'];
+function orderKind_(x) { return ORDER_KINDS.indexOf(x && x.cat) >= 0 ? x.cat : 'その他'; }
+function emptyOrders_() { var o = {}; ORDER_KINDS.forEach(function (k) { o[k] = { amount: 0, count: 0 }; }); return o; }
+
 /** その月の数字。legacy=true は「過去の月次」タブから読んだもの */
 function monthlySummary_(month, settings) {
   settings = settings || getSettings_();
@@ -2368,6 +2377,7 @@ function monthlySummary_(month, settings) {
     month: month, legacy: false, sales: 0, guests: 0, groups: 0, cash: 0, cashless: 0, point: 0,
     nomi: 0, tanpin: 0, event: 0, eventGroups: 0, openDays: 0, closedDays: 0, zeroDays: [],
     regular: 0, regularGroups: 0, regularGuests: 0, // 常連（売上は支払い方法の中にも入っている。分析で別に見るため）
+    orders: emptyOrders_(), // 卓の追加の種類ごとの売上と件数（売上は種類（飲み放題など）の中にも入っている）
     purchases: { '飲食物': 0, '備品': 0, 'その他': 0 }, otherNotes: [], purchaseTotal: 0,
     fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: 0, count: 0, names: [] }, laborTotal: 0,
     plannedEvents: 0
@@ -2382,6 +2392,11 @@ function monthlySummary_(month, settings) {
     if (kindKey[v.kind]) s[kindKey[v.kind]] += amount;
     if (v.kind === 'イベント') s.eventGroups += 1;
     if (v.kind === '常連') { s.regularGroups += 1; s.regularGuests += n(v.people); }
+    (Array.isArray(v.extras) ? v.extras : []).forEach(function (x) {
+      if (!x || x.del || x.type !== '追加') return;
+      var o = s.orders[orderKind_(x)];
+      o.amount += n(x.amount); o.count += 1;
+    });
     openDays[v.bizDate] = true;
   });
   readTable_(TABLES.closings).rows.forEach(function (c) {
@@ -2458,7 +2473,7 @@ function legacySummary_(month) {
     month: month, legacy: true, sales: get('売上'), guests: get('来客数'), groups: get('組数'),
     cash: get('現金'), cashless: get('キャッシュレス'), point: get('ポイント'),
     nomi: 0, tanpin: 0, event: get('イベント'), eventGroups: get('イベントの組数'), openDays: get('営業日数'),
-    regular: 0, regularGroups: 0, regularGuests: 0,
+    regular: 0, regularGroups: 0, regularGuests: 0, orders: null, // 管理シートには追加の種類の内訳がない
     closedDays: get('店休日'), zeroDays: text('売上0円の営業日').split('、').filter(String),
     purchases: { '飲食物': get('飲食物'), '備品': get('備品'), 'その他': get('その他') },
     otherNotes: [], fixed: {}, fixedTotal: 0, laborFixed: [], laborOthers: { cost: get('人件費（その他）'), count: 0, names: [] },
@@ -2504,12 +2519,16 @@ function buildMonthlySheet_() {
     ['　飲み放題', function (s) { return s.nomi; }], ['　常連', function (s) { return s.regular; }], ['　単品', function (s) { return s.tanpin; }], ['　イベント', function (s) { return s.event; }],
     ['来客数', function (s) { return s.guests; }], ['組数', function (s) { return s.groups; }], ['客単価', function (s) { return s.avgPerGuest; }],
     ['常連の組数', function (s) { return s.regularGroups; }], ['常連の人数', function (s) { return s.regularGuests; }],
+    ['卓の追加（種類ごと）', function (s) { return s.orders ? ORDER_KINDS.reduce(function (a, k) { return a + s.orders[k].amount; }, 0) : ''; }]
+  ].concat(ORDER_KINDS.map(function (k) { return ['　' + k, function (s) { return s.orders ? s.orders[k].amount : ''; }]; }))
+    .concat(ORDER_KINDS.map(function (k) { return ['　' + k + 'の件数', function (s) { return s.orders ? s.orders[k].count : ''; }]; }))
+    .concat([
     ['営業日数', function (s) { return s.openDays; }], ['通常営業の1日平均', function (s) { return s.normalDailyAvg; }],
     ['仕入れ', function (s) { return s.purchaseTotal; }],
     ['　飲食物', function (s) { return s.purchases['飲食物']; }], ['　備品', function (s) { return s.purchases['備品']; }],
     ['　その他', function (s) { return s.purchases['その他']; }], ['　その他の内容', function (s) { return s.otherNotes.join('・'); }],
     ['固定費', function (s) { return s.fixedTotal; }]
-  ].concat(fixedItems.map(function (k) { return ['　' + k, function (s) { return s.fixed[k] || 0; }]; }))
+  ]).concat(fixedItems.map(function (k) { return ['　' + k, function (s) { return s.fixed[k] || 0; }]; }))
     .concat([['人件費', function (s) { return s.laborTotal; }]])
     .concat(staffNames.map(function (nm) { return ['　' + nm, function (s) { var r = s.laborFixed.filter(function (x) { return x.name === nm; })[0]; return r ? r.cost : 0; }]; }))
     .concat([
@@ -2566,6 +2585,7 @@ function getSettings_() {
       else if (sameKind_(DEFAULT_SETTINGS[k], v)) s[k] = v;
     } catch (e) { /* 壊れた値は初期値のまま */ }
   });
+  if (!('orderPrices' in stored)) ORDER_KINDS.forEach(function (k) { s.orderPrices[k] = s.quickAdds.slice(); }); // 最初は今の追加のボタンと同じ
   return s;
 }
 

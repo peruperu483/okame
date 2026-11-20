@@ -349,6 +349,9 @@ body.has-upd { --upd-h: 52px; }
 .xlabel { flex-grow: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
 .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .quick .btn { padding: 0 4px; }
+/* 卓の追加：種類（キャストドリンク・ビール…）を押すと、その金額のボタンが出る */
+.order-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 8px; }
+.order-kinds .btn { padding: 0 6px; font-size: 15px; }
 .inline-add { display: flex; gap: 8px; }
 .inline-add .btn { flex-shrink: 0; }
 .row-between { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; }

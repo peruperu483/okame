@@ -2,6 +2,7 @@
 import { h, put, toast, uuid, yen } from '../util.js';
 import { monthLabel } from './common.js';
 import { fmtDuration, EVENT_DURATIONS } from '../bizday.js';
+import { ORDER_KINDS, orderPrices } from '../calc.js';
 import { renderPinGate } from './pin.js';
 
 const STAFF_TABLES = [
@@ -83,6 +84,8 @@ function renderForm(root, app) {
         ? priceListEditor('イベントの時間のボタン', draft, 'eventDurations', EVENT_DURATIONS, dirty, '入店でイベントの「時間指定」を選んだときのボタン。終わりの予定＝入店の時刻＋この時間。半端な時間は「終了時刻」で入れられます。',
           { fmt: fmtDuration, placeholder: '足す時間（例：2.5 で2時間30分）', parse: v => Math.round(Number(v) * 60), step: '0.5' })
         : null),
+
+    card('卓の追加の金額のボタン（種類ごと）', orderPricesEditor(draft, dirty, app)),
 
     card('延長', h('p', { class: 'help' }, '料金と時間が決まったら足してください。会計のときに選べるようになります。'),
       extensionsEditor(draft, dirty)),
@@ -242,6 +245,16 @@ function priceListEditor(label, draft, key, fallback, dirty, help, { fmt = yen, 
   };
   paint();
   return field(label, help, h('div', {}, wrap, h('div', { class: 'inline' }, input, h('button', { class: 'btn', onclick: add }, '足す'))));
+}
+
+/** 卓の追加の金額のボタン（種類ごと）。GASが 0.23.0 になってから（古いGASには保存できないため） */
+function orderPricesEditor(draft, dirty, app) {
+  const s = app.settings.orderPrices;
+  if (!s || typeof s !== 'object' || Array.isArray(s)) {
+    return h('p', { class: 'help' }, `今は、どの種類も ${orderPrices(app.settings, ORDER_KINDS[0]).map(yen).join('・')} のボタンです。GASを 0.23.0 に貼り替えると、種類ごとに変えられます。`);
+  }
+  return [h('p', { class: 'help' }, '店内で卓を広げて、追加の種類を押したときに出るボタン。ほかの金額は、そのとき手打ちできます。'),
+    ORDER_KINDS.map(k => priceListEditor(k, draft.orderPrices, k, orderPrices(app.settings, k), dirty))];
 }
 
 /** 延長の種類（名前・料金・時間） */

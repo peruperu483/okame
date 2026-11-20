@@ -3,12 +3,26 @@
 // - 傾向：期間（今日・今週・今月・指定）の来客から、端末で計算する（雛形どおり）
 import { h, put, toast, yen } from '../util.js';
 import { addDays, dowOf } from '../bizday.js';
-import { KINDS, ST_OUT, ST_DEL, total, pct, nomiMinutes, fmtHours } from '../calc.js';
+import { KINDS, ST_OUT, ST_DEL, total, pct, nomiMinutes, fmtHours, ORDER_KINDS, orderSums } from '../calc.js';
 import { seg } from '../ui.js';
 import { fmtMD, monthLabel, monthNav, monthRange } from './common.js';
 
 const JST_MS = 9 * 3600e3;
 const hourOf = iso => { let x = new Date(Date.parse(iso) + JST_MS).getUTCHours(); if (x < 12) x += 24; return x; };
+/** 卓の追加の種類ごとの売上と件数（月次と傾向で同じ形）。orders が null なら note を出す */
+function ordersCard(orders, note) {
+  const sec = h('section', { class: 'dcard' }, h('h2', {}, '卓の追加（種類ごと）'));
+  if (!orders) { sec.append(h('div', { class: 'small muted2' }, note)); return sec; }
+  const rows = ORDER_KINDS.map(k => [k, orders[k] || { amount: 0, count: 0 }]);
+  const sum = rows.reduce((a, [, o]) => a + o.amount, 0), cnt = rows.reduce((a, [, o]) => a + o.count, 0);
+  sec.append(
+    h('div', { class: 'small muted2' }, `店内で卓に足した注文。合計 ${yen(sum)}・${cnt}件。延長と、入店のときの金額（飲み放題など）は入りません。前の版の追加（種類なし）は「その他」に数えます。`),
+    ...rows.map(([k, o]) => h('div', { class: 'brow' },
+      h('div', { class: 'brow-top' }, h('span', { class: 'grow' }, k), h('span', { class: 'pct' }, `${o.count}件`), h('b', { class: 'num amt' }, yen(o.amount))),
+      h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: pct(o.amount, sum) + '%' } })))));
+  return sec;
+}
+
 const signedPct = (a, b) => (b ? `${a >= b ? '+' : '−'}${Math.abs(Math.round((a - b) / b * 100))}%` : '—');
 
 export function renderAna(root, app) {
@@ -100,6 +114,7 @@ export function renderAna(root, app) {
           bars(KINDS.map(k => [k, s[{ '飲み放題': 'nomi', '常連': 'regular', '単品': 'tanpin', 'イベント': 'event' }[k]] || 0]), s.sales),
           !s.legacy ? row('常連', s.regularGroups == null ? 'GASを0.20.0に' : `${s.regularGroups}組・${s.regularGuests}名・${yen(s.regular || 0)}`, 'strong') : null,
           !s.legacy ? h('div', { class: 'small muted2' }, '常連の売上も、支払い方法（現金・キャッシュレス・ポイント）の中に入っています。') : null)),
+      ordersCard(s.orders, s.legacy ? '管理シートには、追加の種類の内訳がありません。' : 'GASを0.23.0に貼り替えると出ます。'),
       h('div', { class: 'dash-two' },
         h('section', { class: 'dcard' }, h('h2', {}, '支出の内訳'),
           row('仕入れ', yen(s.purchaseTotal), 'strong'),
@@ -180,6 +195,7 @@ export function renderAna(root, app) {
           kinds.map(([k, v]) => h('div', { class: 'brow' },
             h('div', { class: 'brow-top' }, h('span', { class: 'grow' }, k), h('b', { class: 'num amt' }, yen(v))),
             h('div', { class: 'bar' }, h('div', { class: 'bar-in', style: { width: pct(v, sales) + '%' } })))))),
+      ordersCard(orderSums(done)),
       h('section', { class: 'dcard' }, h('h2', {}, '曜日別の平均（1日の売上）'),
         h('div', { class: 'hbars' }, dows.map(([w, v, n]) => h('div', { class: 'hbar' },
           h('b', { class: 'small' }, v ? yen(v) : ''),
